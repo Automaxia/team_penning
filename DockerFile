@@ -1,0 +1,53 @@
+FROM python:3.13.3-slim AS builder
+
+# Criar usuário não-root
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+WORKDIR /app
+
+# Instalar dependências do sistema com versões específicas
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libbz2-dev \
+    gcc \
+    libc-dev \
+    libffi-dev \
+    libssl-dev \
+    git \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copiar apenas os arquivos necessários
+COPY --chown=appuser:appuser ./requirements.txt .
+
+# Instalar dependências Python
+RUN python -m pip install --no-cache-dir --upgrade pip && \
+    python -m pip install -r requirements.txt --no-cache-dir 
+
+# Copiar código da aplicação
+COPY --chown=appuser:appuser . .
+
+# Configurar variáveis de ambiente
+ENV API_ENVIRONMENT=production \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Adicionar labels para documentação
+LABEL org.opencontainers.image.source="https://hub.docker.com/r/wesleyromualdo/talkcare-api"
+LABEL org.opencontainers.image.description="Imagem privada da API Talkcare"
+LABEL org.opencontainers.image.vendor="Talkcare"
+LABEL org.opencontainers.image.version="1.0.0"
+LABEL org.opencontainers.image.licenses="proprietary"
+LABEL org.opencontainers.image.created="2024-03-21"
+
+# Configurar permissões
+RUN chown -R appuser:appuser /app && \
+    chmod -R 755 /app
+
+# Mudar para usuário não-root
+USER appuser
+
+EXPOSE 3000
+
+# Comando para executar a aplicação
+CMD ["python", "-m", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "3000"]
