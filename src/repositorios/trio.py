@@ -1,12 +1,12 @@
 from sqlalchemy import select, delete, update, func, desc, asc, and_, or_
 from sqlalchemy.orm import Session, joinedload, aliased
-from src.database import models_lctp, schemas_lctp
+from src.database import models, schemas
 from src.utils.error_handler import handle_error
 from src.repositorios.competidor import RepositorioCompetidor
 from datetime import datetime, date, timezone
 from typing import List, Optional, Dict, Any, Tuple
 import pytz
-import random
+import random, traceback
 
 AMSP = pytz.timezone('America/Sao_Paulo')
 
@@ -20,12 +20,12 @@ class RepositorioTrio:
     async def get_by_id(self, trio_id: int):
         """Recupera um trio pelo ID com integrantes"""
         try:
-            stmt = select(schemas_lctp.Trios).options(
-                joinedload(schemas_lctp.Trios.integrantes).joinedload(schemas_lctp.IntegrantesTrios.competidor),
-                joinedload(schemas_lctp.Trios.prova),
-                joinedload(schemas_lctp.Trios.categoria),
-                joinedload(schemas_lctp.Trios.resultados)
-            ).where(schemas_lctp.Trios.id == trio_id)
+            stmt = select(schemas.Trios).options(
+                joinedload(schemas.Trios.integrantes).joinedload(schemas.IntegrantesTrios.competidor),
+                joinedload(schemas.Trios.prova),
+                joinedload(schemas.Trios.categoria),
+                joinedload(schemas.Trios.resultados)
+            ).where(schemas.Trios.id == trio_id)
             
             return self.db.execute(stmt).scalars().first()
         except Exception as error:
@@ -34,18 +34,18 @@ class RepositorioTrio:
     async def get_by_prova_categoria(self, prova_id: int, categoria_id: int):
         """Recupera trios de uma prova/categoria específica"""
         try:
-            stmt = select(schemas_lctp.Trios).options(
-                joinedload(schemas_lctp.Trios.integrantes).joinedload(schemas_lctp.IntegrantesTrios.competidor)
+            stmt = select(schemas.Trios).options(
+                joinedload(schemas.Trios.integrantes).joinedload(schemas.IntegrantesTrios.competidor)
             ).where(
-                schemas_lctp.Trios.prova_id == prova_id,
-                schemas_lctp.Trios.categoria_id == categoria_id
-            ).order_by(schemas_lctp.Trios.numero_trio)
+                schemas.Trios.prova_id == prova_id,
+                schemas.Trios.categoria_id == categoria_id
+            ).order_by(schemas.Trios.numero_trio)
             
             return self.db.execute(stmt).scalars().all()
         except Exception as error:
             handle_error(error, self.get_by_prova_categoria)
 
-    async def post(self, trio_data: models_lctp.TrioPOST, competidores_ids: List[int]):
+    async def post(self, trio_data: models.TrioPOST, competidores_ids: List[int]):
         """Cria um trio com seus integrantes"""
         try:
             # Validar que temos exatamente 3 competidores
@@ -61,13 +61,37 @@ class RepositorioTrio:
             if not valido:
                 raise ValueError(mensagem)
 
+            numero_trio = trio_data.numero_trio
+            if not numero_trio:
+                # Buscar o maior número existente para a mesma prova/categoria
+                ultimo_numero = self.db.execute(
+                    select(func.max(schemas.Trios.numero_trio)).where(
+                        schemas.Trios.prova_id == trio_data.prova_id,
+                        schemas.Trios.categoria_id == trio_data.categoria_id
+                    )
+                ).scalar() or 0
+                
+                numero_trio = ultimo_numero + 1
+            else:
+                # Verificar se o número já existe na mesma prova/categoria
+                numero_existente = self.db.execute(
+                    select(schemas.Trios).where(
+                        schemas.Trios.prova_id == trio_data.prova_id,
+                        schemas.Trios.categoria_id == trio_data.categoria_id,
+                        schemas.Trios.numero_trio == numero_trio
+                    )
+                ).scalars().first()
+                
+                if numero_existente:
+                    raise ValueError(f"Número do trio {numero_trio} já existe nesta prova/categoria")
+
             # Criar o trio
-            db_trio = schemas_lctp.Trios(
+            db_trio = schemas.Trios(
                 prova_id=trio_data.prova_id,
                 categoria_id=trio_data.categoria_id,
                 status=trio_data.status,
                 is_cabeca_chave=trio_data.is_cabeca_chave,
-                numero_trio=trio_data.numero_trio,
+                numero_trio=numero_trio,
                 formacao_manual=trio_data.formacao_manual,
                 cup_type=trio_data.cup_type
             )
@@ -76,9 +100,9 @@ class RepositorioTrio:
             self.db.flush()  # Para obter o ID do trio
 
             # Calcular totais
-            competidores = await self.db.execute(
-                select(schemas_lctp.Competidores).where(
-                    schemas_lctp.Competidores.id.in_(competidores_ids)
+            competidores = self.db.execute(
+                select(schemas.Competidores).where(
+                    schemas.Competidores.id.in_(competidores_ids)
                 )
             ).scalars().all()
 
@@ -98,12 +122,14 @@ class RepositorioTrio:
 
             # Criar integrantes
             for i, competidor_id in enumerate(competidores_ids):
-                integrante = schemas_lctp.IntegrantesTrios(
+                integrante = schemas.IntegrantesTrios(
                     trio_id=db_trio.id,
                     competidor_id=competidor_id,
                     ordem_escolha=i + 1
                 )
                 self.db.add(integrante)
+
+            await self._criar_passadas_basicas(db_trio)
 
             self.db.commit()
             self.db.refresh(db_trio)
@@ -113,15 +139,73 @@ class RepositorioTrio:
             self.db.rollback()
             handle_error(error, self.post)
 
-    async def put(self, trio_id: int, trio_data: models_lctp.TrioPUT):
+    async def _criar_passadas_basicas(self, trio: schemas.Trios):
+        """Cria passadas básicas para o trio"""
+        
+        try:
+            from src.repositorios.passadas import RepositorioPassadas
+            repo_passadas = RepositorioPassadas(self.db)
+            
+            # Tentar configuração específica da prova/categoria
+            config = repo_passadas.obter_configuracao(trio.prova_id, trio.categoria_id)
+            
+            if config:
+                # Usar configuração específica encontrada
+                max_passadas = config.max_passadas_por_trio
+                tempo_limite = float(config.tempo_limite_padrao)
+            else:
+                # Usar configurações padrão por categoria
+                categoria = self.db.execute(
+                    select(schemas.Categorias).where(schemas.Categorias.id == trio.categoria_id)
+                ).scalars().first()
+                
+                configuracoes = {
+                    'baby': {'passadas': 3, 'tempo_limite': 90.0},
+                    'kids': {'passadas': 5, 'tempo_limite': 75.0},
+                    'mirim': {'passadas': 8, 'tempo_limite': 65.0},
+                    'feminina': {'passadas': 8, 'tempo_limite': 65.0},
+                    'aberta': {'passadas': 10, 'tempo_limite': 50.0},
+                    'handicap': {'passadas': 10, 'tempo_limite': 55.0}
+                }
+                
+                config_default = configuracoes.get(
+                    categoria.tipo if categoria else 'aberta', 
+                    configuracoes['aberta']
+                )
+                max_passadas = config_default['passadas']
+                tempo_limite = config_default['tempo_limite']
+            
+            # Criar as passadas
+            for numero in range(1, max_passadas + 1):
+                passada = schemas.PassadasTrio(
+                    trio_id=trio.id,
+                    prova_id=trio.prova_id,
+                    numero_passada=numero,
+                    tempo_limite=tempo_limite,
+                    status='pendente'
+                )
+                self.db.add(passada)
+                
+        except Exception:
+            # Se der qualquer erro, criar 1 passada padrão
+            passada_default = schemas.PassadasTrio(
+                trio_id=trio.id,
+                prova_id=trio.prova_id,
+                numero_passada=1,
+                tempo_limite=60.0,
+                status='pendente'
+            )
+            self.db.add(passada_default)
+
+    async def put(self, trio_id: int, trio_data: models.TrioPUT):
         """Atualiza um trio"""
         try:
             # Criar dicionário apenas com campos não None
             update_data = {k: v for k, v in trio_data.dict().items() if v is not None}
             update_data['updated_at'] = datetime.now(timezone.utc).astimezone(AMSP)
             
-            stmt = update(schemas_lctp.Trios).where(
-                schemas_lctp.Trios.id == trio_id
+            stmt = update(schemas.Trios).where(
+                schemas.Trios.id == trio_id
             ).values(**update_data)
             
             self.db.execute(stmt)
@@ -135,23 +219,23 @@ class RepositorioTrio:
         """Remove um trio e seus integrantes"""
         try:
             # Verificar se o trio tem resultados
-            resultado = await self.db.execute(
-                select(schemas_lctp.Resultados).where(schemas_lctp.Resultados.trio_id == trio_id)
+            resultado = self.db.execute(
+                select(schemas.Resultados).where(schemas.Resultados.trio_id == trio_id)
             ).scalars().first()
             
             if resultado:
                 raise ValueError("Não é possível excluir trio que já possui resultados")
 
             # Excluir integrantes primeiro (CASCADE deveria fazer isso automaticamente)
-            await self.db.execute(
-                delete(schemas_lctp.IntegrantesTrios).where(
-                    schemas_lctp.IntegrantesTrios.trio_id == trio_id
+            self.db.execute(
+                delete(schemas.IntegrantesTrios).where(
+                    schemas.IntegrantesTrios.trio_id == trio_id
                 )
             )
             
             # Excluir trio
-            await self.db.execute(
-                delete(schemas_lctp.Trios).where(schemas_lctp.Trios.id == trio_id)
+            self.db.execute(
+                delete(schemas.Trios).where(schemas.Trios.id == trio_id)
             )
             
             self.db.commit()
@@ -160,41 +244,198 @@ class RepositorioTrio:
             self.db.rollback()
             handle_error(error, self.delete)
 
+    async def reorganizar_numeracao_categoria(self, prova_id: int, categoria_id: int):
+        """Reorganiza a numeração dos trios de uma categoria específica"""
+        try:
+            # Buscar todos os trios da prova/categoria ordenados por ID (ordem de criação)
+            trios = self.db.execute(
+                select(schemas.Trios).where(
+                    schemas.Trios.prova_id == prova_id,
+                    schemas.Trios.categoria_id == categoria_id
+                ).order_by(schemas.Trios.id.asc())
+            ).scalars().all()
+            
+            # Renumerar sequencialmente
+            for i, trio in enumerate(trios, 1):
+                trio.numero_trio = i
+            
+            self.db.commit()
+            return True
+        except Exception as error:
+            self.db.rollback()
+            handle_error(error, self.reorganizar_numeracao_categoria)
+            return False
+
+    async def get_proximo_numero_trio(self, prova_id: int, categoria_id: int) -> int:
+        """Retorna o próximo número disponível para um trio"""
+        try:
+            ultimo_numero = self.db.execute(
+                select(func.max(schemas.Trios.numero_trio)).where(
+                    schemas.Trios.prova_id == prova_id,
+                    schemas.Trios.categoria_id == categoria_id
+                )
+            ).scalar() or 0
+            
+            return ultimo_numero + 1
+        except Exception as error:
+            handle_error(error, self.get_proximo_numero_trio)
+            return 1
+
     # ---------------------- Sorteios ----------------------
 
     async def sortear_trios(self, prova_id: int, categoria_id: int, competidores_ids: List[int]) -> Dict[str, Any]:
-        """Realiza sorteio de trios baseado nas regras da categoria"""
+        """
+        Algoritmo baseado no script que funcionou perfeitamente
+        """
         try:
-            # Buscar categoria para verificar regras
-            categoria = await self.db.execute(
-                select(schemas_lctp.Categorias).where(schemas_lctp.Categorias.id == categoria_id)
+            print(f"🚀 INICIANDO SORTEIO com algoritmo testado")
+            print(f"📝 Competidores: {competidores_ids}")
+            
+            # 1. BUSCAR CONFIGURAÇÃO
+            config_passadas = self.db.execute(
+                select(schemas.ConfiguracaoPassadasProva).where(
+                    schemas.ConfiguracaoPassadasProva.prova_id == prova_id,
+                    schemas.ConfiguracaoPassadasProva.categoria_id == categoria_id,
+                    schemas.ConfiguracaoPassadasProva.ativa == True
+                )
             ).scalars().first()
             
-            if not categoria:
-                raise ValueError("Categoria não encontrada")
+            if not config_passadas:
+                raise ValueError("Configuração não encontrada")
 
-            if not categoria.permite_sorteio:
-                raise ValueError("Esta categoria não permite sorteio")
-
-            # Verificar número de competidores
-            total_competidores = len(competidores_ids)
+            total_participacoes = config_passadas.max_corridas_por_pessoa
+            tamanho_trio = 3
+            max_iter = 5000
             
-            if total_competidores < 3:
-                raise ValueError("Número insuficiente de competidores para formar trios")
+            print(f"⚙️ Cada competidor pode participar {total_participacoes} vezes")
+            print(f"🎯 Meta: {(len(competidores_ids) * total_participacoes) // tamanho_trio} trios máximos")
 
-            # Aplicar regras de sorteio por tipo de categoria
-            if categoria.tipo.value == 'baby':
-                return await self._sortear_completo(prova_id, categoria_id, competidores_ids)
-            elif categoria.tipo.value in ['kids', 'feminina']:
-                return await self._sortear_parcial(prova_id, categoria_id, competidores_ids, categoria)
-            elif categoria.tipo.value == 'mirim':
-                return await self._sortear_mirim(prova_id, categoria_id, competidores_ids, categoria)
-            else:
-                return await self._sortear_aberto(prova_id, categoria_id, competidores_ids, categoria)
+            # 2. VALIDAÇÕES BÁSICAS
+            if len(competidores_ids) < tamanho_trio:
+                raise ValueError("Poucos competidores para formar um trio")
+
+            # 3. ALGORITMO PRINCIPAL (baseado no seu script)
+            participacao = {}
+            for comp_id in competidores_ids:
+                participacao[comp_id] = 0
                 
+            trios_criados = []
+            max_trios = (len(competidores_ids) * total_participacoes) // tamanho_trio
+            numero_trio = 1
+            
+            # Cria uma fila dos competidores para distribuir participações de forma justa
+            competidores_fila = list(competidores_ids)
+            random.shuffle(competidores_fila)
+            rodada = 0
+            iteracoes = 0
+
+            print(f"🔄 Iniciando formação de trios...")
+
+            while True:
+                iteracoes += 1
+                if iteracoes > max_iter:
+                    print(f"⚠️ Limite de {max_iter} iterações atingido! Interrompendo.")
+                    break
+
+                # Filtra só quem pode participar mais (não chegou ao limite)
+                elegiveis = [comp_id for comp_id in competidores_fila if participacao[comp_id] < total_participacoes]
+                
+                if len(elegiveis) < tamanho_trio:
+                    print(f"🔚 Não há competidores suficientes para formar mais trios")
+                    print(f"   Elegíveis restantes: {len(elegiveis)}")
+                    break
+
+                # Ordena os elegíveis por quem menos jogou (prioriza quem participou menos)
+                elegiveis.sort(key=lambda comp_id: participacao[comp_id])
+
+                # Seleciona trio (priorizando quem participou menos)
+                trio_candidato = elegiveis[:tamanho_trio]
+                
+                print(f"🔍 Trio {numero_trio}: {trio_candidato}")
+                print(f"   Participações atuais: {[participacao[c] for c in trio_candidato]}")
+
+                try:
+                    # Criar trio
+                    trio_data = models.TrioPOST(
+                        prova_id=prova_id,
+                        categoria_id=categoria_id,
+                        numero_trio=numero_trio,
+                        formacao_manual=False
+                    )
+                    
+                    trio = await self.post(trio_data, trio_candidato)
+                    trios_criados.append(trio)
+                    
+                    # Atualizar participações
+                    for comp_id in trio_candidato:
+                        participacao[comp_id] += 1
+                    
+                    print(f"✅ Trio {numero_trio} criado: {trio_candidato}")
+                    print(f"   Participações atualizadas: {[participacao[c] for c in trio_candidato]}")
+                    
+                    numero_trio += 1
+                    
+                except Exception as e:
+                    print(f"❌ Erro ao criar trio {trio_candidato}: {str(e)}")
+                    # Em caso de erro, marca o primeiro competidor como tendo uma participação extra
+                    # para evitar tentar o mesmo trio novamente
+                    participacao[trio_candidato[0]] += 1
+
+                rodada += 1
+                if rodada > max_trios * 2:
+                    print(f"⚠️ Limite interno de rodadas atingido! Interrompendo.")
+                    break
+
+            # 4. RELATÓRIO FINAL
+            print(f"\n📊 RELATÓRIO FINAL:")
+            print(f"Trios criados: {len(trios_criados)}")
+            
+            print(f"\n👥 Participações por competidor:")
+            for comp_id in competidores_ids:
+                print(f"   Competidor {comp_id}: {participacao[comp_id]} trios")
+            
+            faltantes = [comp_id for comp_id in competidores_ids if participacao[comp_id] < total_participacoes]
+            if faltantes:
+                print(f"\n⚠️ Competidores com menos participações que o desejado: {faltantes}")
+            else:
+                print(f"\n🎉 Todos participaram do número desejado de trios!")
+
+            # 5. COMMIT NO BANCO
+            self.db.commit()
+
+            return {
+                'trios_criados': trios_criados,
+                'total_trios': len(trios_criados),
+                'participacoes_por_competidor': participacao,
+                'total_participacoes_realizadas': sum(participacao.values()),
+                'total_participacoes_esperadas': len(competidores_ids) * total_participacoes,
+                'competidores_com_deficit': faltantes,
+                'eficiencia': (sum(participacao.values()) / (len(competidores_ids) * total_participacoes)) * 100,
+                'mensagem': f'{len(trios_criados)} trios criados com distribuição equilibrada'
+            }
+            
         except Exception as error:
             self.db.rollback()
-            handle_error(error, self.sortear_trios)
+            print(f"💥 ERRO: {str(error)}")
+            raise error
+
+    def _formar_trio_sem_repeticao(self, pool_sorteio: List[int]) -> List[int]:
+        """
+        Forma um trio garantindo que não há competidores repetidos
+        IMPORTANTE: Não modifica o pool original, apenas seleciona competidores únicos
+        """
+        if len(pool_sorteio) < 3:
+            return []
+        
+        # Criar conjunto de competidores únicos disponíveis
+        competidores_unicos = list(set(pool_sorteio))
+        
+        if len(competidores_unicos) < 3:
+            return []
+        
+        # Embaralhar e pegar os primeiros 3
+        random.shuffle(competidores_unicos)
+        return competidores_unicos[:3]
 
     async def _sortear_completo(self, prova_id: int, categoria_id: int, competidores_ids: List[int]) -> Dict[str, Any]:
         """Sorteio completo para categoria baby"""
@@ -209,7 +450,7 @@ class RepositorioTrio:
         for i in range(0, len(competidores) - 2, 3):
             trio_competidores = competidores[i:i+3]
             
-            trio_data = models_lctp.TrioPOST(
+            trio_data = models.TrioPOST(
                 prova_id=prova_id,
                 categoria_id=categoria_id,
                 numero_trio=numero_trio,
@@ -229,6 +470,132 @@ class RepositorioTrio:
             'competidores_sorteados': len(competidores_sorteados),
             'competidores_nao_sorteados': competidores_nao_sorteados,
             'mensagem': f'{len(trios_criados)} trios criados por sorteio completo'
+        }
+
+    async def _validar_competidores_aptos(self, competidores_ids: List[int], prova_id: int, categoria_id: int) -> List[int]:
+        """Valida quais competidores podem participar baseado no ControleParticipacao"""
+        competidores_aptos = []
+        
+        for competidor_id in competidores_ids:
+            # Buscar ou criar controle de participação
+            controle = self.db.execute(
+                select(schemas.ControleParticipacao).where(
+                    schemas.ControleParticipacao.competidor_id == competidor_id,
+                    schemas.ControleParticipacao.prova_id == prova_id,
+                    schemas.ControleParticipacao.categoria_id == categoria_id
+                )
+            ).scalars().first()
+            
+            if not controle:
+                # Criar controle se não existir
+                controle = schemas.ControleParticipacao(
+                    competidor_id=competidor_id,
+                    prova_id=prova_id,
+                    categoria_id=categoria_id,
+                    total_passadas_executadas=0,
+                    max_passadas_permitidas=5,  # padrão
+                    pode_competir=True
+                )
+                self.db.add(controle)
+            
+            # Verificar se pode competir
+            if controle.pode_competir and controle.total_passadas_executadas < controle.max_passadas_permitidas:
+                competidores_aptos.append(competidor_id)
+        
+        self.db.commit()
+        return competidores_aptos
+
+    async def _sortear_multiplas_passadas(self, prova_id: int, categoria_id: int, competidores_aptos: List[int], 
+                                    categoria, config_passadas) -> Dict[str, Any]:
+        """Sorteia múltiplos trios baseado no max_passadas_por_trio"""
+        
+        max_passadas = config_passadas.max_passadas_por_trio
+        max_corridas_pessoa = config_passadas.max_corridas_por_pessoa
+        
+        # Calcular quantos trios cada competidor pode participar
+        participacoes_por_competidor = {}
+        for comp_id in competidores_aptos:
+            controle = self.db.execute(
+                select(schemas.ControleParticipacao).where(
+                    schemas.ControleParticipacao.competidor_id == comp_id,
+                    schemas.ControleParticipacao.prova_id == prova_id,
+                    schemas.ControleParticipacao.categoria_id == categoria_id
+                )
+            ).scalars().first()
+            
+            participacoes_restantes = min(
+                max_corridas_pessoa - controle.total_passadas_executadas,
+                max_passadas
+            )
+            participacoes_por_competidor[comp_id] = max(0, participacoes_restantes)
+        
+        # Criar pool expandido de competidores
+        pool_expandido = []
+        for comp_id, num_participacoes in participacoes_por_competidor.items():
+            pool_expandido.extend([comp_id] * num_participacoes)
+        
+        if len(pool_expandido) < 3:
+            raise ValueError("Não há competidores suficientes para formar trios")
+        
+        # Embaralhar o pool
+        random.shuffle(pool_expandido)
+        
+        trios_criados = []
+        competidores_usados_por_trio = set()
+        numero_trio = 1
+        
+        # Formar trios garantindo que não se repitam
+        while len(pool_expandido) >= 3:
+            trio_atual = []
+            indices_remover = []
+            
+            # Selecionar 3 competidores diferentes
+            for i, comp_id in enumerate(pool_expandido):
+                if len(trio_atual) == 3:
+                    break
+                    
+                # Verificar se competidor já está no trio atual
+                if comp_id not in [c for c in trio_atual]:
+                    trio_atual.append(comp_id)
+                    indices_remover.append(i)
+            
+            if len(trio_atual) == 3:
+                # Validar trio (handicap, idade, etc.)
+                repo_competidor = RepositorioCompetidor(self.db)
+                valido, _ = await repo_competidor.validar_trio_handicap(trio_atual, categoria_id)
+                
+                if valido:
+                    # Criar trio
+                    trio_data = models.TrioPOST(
+                        prova_id=prova_id,
+                        categoria_id=categoria_id,
+                        numero_trio=numero_trio,
+                        formacao_manual=False
+                    )
+                    
+                    trio = await self.post(trio_data, trio_atual)
+                    trios_criados.append(trio)
+                    numero_trio += 1
+                    
+                    # Remover competidores usados do pool (índices em ordem reversa)
+                    for idx in sorted(indices_remover, reverse=True):
+                        pool_expandido.pop(idx)
+                else:
+                    # Se trio inválido, remover apenas o primeiro competidor e tentar novamente
+                    if indices_remover:
+                        pool_expandido.pop(indices_remover[0])
+            else:
+                # Não conseguiu formar trio completo
+                break
+        
+        return {
+            'trios_criados': trios_criados,
+            'total_trios': len(trios_criados),
+            'competidores_sorteados': len(set([comp for trio in trios_criados for comp in trio_atual])),
+            'competidores_nao_sorteados': pool_expandido,
+            'max_passadas_por_trio': max_passadas,
+            'max_corridas_por_pessoa': max_corridas_pessoa,
+            'mensagem': f'{len(trios_criados)} trios criados com múltiplas passadas por competidor'
         }
 
     async def _sortear_parcial(self, prova_id: int, categoria_id: int, competidores_ids: List[int], categoria) -> Dict[str, Any]:
@@ -259,7 +626,7 @@ class RepositorioTrio:
         for i in range(0, len(competidores_selecionados), 3):
             trio_competidores = competidores_selecionados[i:i+3]
             
-            trio_data = models_lctp.TrioPOST(
+            trio_data = models.TrioPOST(
                 prova_id=prova_id,
                 categoria_id=categoria_id,
                 numero_trio=numero_trio,
@@ -286,21 +653,36 @@ class RepositorioTrio:
         repo_competidor = RepositorioCompetidor(self.db)
         
         # Buscar dados dos competidores
-        competidores = await self.db.execute(
-            select(schemas_lctp.Competidores).where(
-                schemas_lctp.Competidores.id.in_(competidores_ids)
+        competidores = self.db.execute(
+            select(schemas.Competidores).where(
+                schemas.Competidores.id.in_(competidores_ids)
             )
         ).scalars().all()
         
         # Calcular idades
         hoje = date.today()
         competidores_com_idade = []
+        competidores_invalidos = []
+
         for c in competidores:
-            idade = hoje.year - c.data_nascimento.year
-            if (hoje.month, hoje.day) < (c.data_nascimento.month, c.data_nascimento.day):
-                idade -= 1
-            competidores_com_idade.append((c.id, idade))
+            if c.data_nascimento is None:
+                competidores_invalidos.append(f"ID:{c.id} {c.nome} - data_nascimento é NULL")
+                continue
+                
+            try:
+                idade = hoje.year - c.data_nascimento.year
+                if (hoje.month, hoje.day) < (c.data_nascimento.month, c.data_nascimento.day):
+                    idade -= 1
+                competidores_com_idade.append((c.id, idade))
+            except Exception as e:
+                competidores_invalidos.append(f"ID:{c.id} {c.nome} - erro no cálculo: {e}")
         
+        if competidores_invalidos:
+            raise ValueError(f"Competidores com dados inválidos: {'; '.join(competidores_invalidos)}")
+        
+        if len(competidores_com_idade) < 3:
+            raise ValueError("Competidores insuficientes com dados válidos para formar trios")
+
         # Ordenar por idade para facilitar combinações
         competidores_com_idade.sort(key=lambda x: x[1])
         
@@ -324,7 +706,7 @@ class RepositorioTrio:
                             # Trio válido encontrado
                             trio_competidores = [id1, id2, id3]
                             
-                            trio_data = models_lctp.TrioPOST(
+                            trio_data = models.TrioPOST(
                                 prova_id=prova_id,
                                 categoria_id=categoria_id,
                                 numero_trio=numero_trio,
@@ -378,7 +760,7 @@ class RepositorioTrio:
             valido, _ = await repo_competidor.validar_trio_handicap(trio_candidato, categoria.id)
             
             if valido:
-                trio_data = models_lctp.TrioPOST(
+                trio_data = models.TrioPOST(
                     prova_id=prova_id,
                     categoria_id=categoria_id,
                     numero_trio=numero_trio,
@@ -458,13 +840,13 @@ class RepositorioTrio:
                         competidores_usados.add(trio_competidores[-1])
 
                 if len(trio_competidores) == 3:
-                    trio_data = models_lctp.TrioPOST(
+                    trio_data = models.TrioPOST(
                         prova_id=prova_id,
                         categoria_id=categoria_id,
                         numero_trio=numero_trio,
                         formacao_manual=True,
                         is_cabeca_chave=True,
-                        cup_type=models_lctp.TipoCopa.COPA_CAMPEOES
+                        cup_type=models.TipoCopa.COPA_CAMPEOES
                     )
                     
                     trio = await self.post(trio_data, trio_competidores)
@@ -494,9 +876,9 @@ class RepositorioTrio:
         try:
             # Marcar os 2 primeiros como cabeças de chave (ou conforme regra específica)
             for i, competidor_id in enumerate(competidores_ids[:2]):  # Primeiros 2
-                stmt = update(schemas_lctp.IntegrantesTrios).where(
-                    schemas_lctp.IntegrantesTrios.trio_id == trio_id,
-                    schemas_lctp.IntegrantesTrios.competidor_id == competidor_id
+                stmt = update(schemas.IntegrantesTrios).where(
+                    schemas.IntegrantesTrios.trio_id == trio_id,
+                    schemas.IntegrantesTrios.competidor_id == competidor_id
                 ).values(is_cabeca_chave=True)
                 
                 self.db.execute(stmt)
@@ -510,15 +892,15 @@ class RepositorioTrio:
     async def get_trios_prova(self, prova_id: int):
         """Lista todos os trios de uma prova"""
         try:
-            stmt = select(schemas_lctp.Trios).options(
-                joinedload(schemas_lctp.Trios.integrantes).joinedload(schemas_lctp.IntegrantesTrios.competidor),
-                joinedload(schemas_lctp.Trios.categoria),
-                joinedload(schemas_lctp.Trios.resultados)
+            stmt = select(schemas.Trios).options(
+                joinedload(schemas.Trios.integrantes).joinedload(schemas.IntegrantesTrios.competidor),
+                joinedload(schemas.Trios.categoria),
+                joinedload(schemas.Trios.resultados)
             ).where(
-                schemas_lctp.Trios.prova_id == prova_id
+                schemas.Trios.prova_id == prova_id
             ).order_by(
-                schemas_lctp.Trios.categoria_id,
-                schemas_lctp.Trios.numero_trio
+                schemas.Trios.categoria_id,
+                schemas.Trios.numero_trio
             )
             
             return self.db.execute(stmt).scalars().all()
@@ -538,13 +920,13 @@ class RepositorioTrio:
                 comp = integrante.competidor
                 
                 # Histórico do competidor
-                historico = await self.db.execute(
+                historico = self.db.execute(
                     select(
-                        func.count(schemas_lctp.Pontuacao.id).label('total_provas'),
-                        func.avg(schemas_lctp.Pontuacao.colocacao).label('colocacao_media'),
-                        func.sum(schemas_lctp.Pontuacao.pontos_total).label('total_pontos')
+                        func.count(schemas.Pontuacao.id).label('total_provas'),
+                        func.avg(schemas.Pontuacao.colocacao).label('colocacao_media'),
+                        func.sum(schemas.Pontuacao.pontos_total).label('total_pontos')
                     ).where(
-                        schemas_lctp.Pontuacao.competidor_id == comp.id
+                        schemas.Pontuacao.competidor_id == comp.id
                     )
                 ).first()
                 
@@ -580,34 +962,34 @@ class RepositorioTrio:
         """Gera ranking de trios por categoria"""
         try:
             query = self.db.query(
-                schemas_lctp.Trios,
-                schemas_lctp.Resultados.colocacao,
-                schemas_lctp.Resultados.media_tempo,
-                schemas_lctp.Resultados.premiacao_valor,
-                schemas_lctp.Provas.nome.label('prova_nome'),
-                schemas_lctp.Provas.data
+                schemas.Trios,
+                schemas.Resultados.colocacao,
+                schemas.Resultados.media_tempo,
+                schemas.Resultados.premiacao_valor,
+                schemas.Provas.nome.label('prova_nome'),
+                schemas.Provas.data
             ).join(
-                schemas_lctp.Resultados,
-                schemas_lctp.Trios.id == schemas_lctp.Resultados.trio_id
+                schemas.Resultados,
+                schemas.Trios.id == schemas.Resultados.trio_id
             ).join(
-                schemas_lctp.Provas,
-                schemas_lctp.Trios.prova_id == schemas_lctp.Provas.id
+                schemas.Provas,
+                schemas.Trios.prova_id == schemas.Provas.id
             ).options(
-                joinedload(schemas_lctp.Trios.integrantes).joinedload(schemas_lctp.IntegrantesTrios.competidor)
+                joinedload(schemas.Trios.integrantes).joinedload(schemas.IntegrantesTrios.competidor)
             ).filter(
-                schemas_lctp.Trios.categoria_id == categoria_id,
-                schemas_lctp.Resultados.colocacao.isnot(None)
+                schemas.Trios.categoria_id == categoria_id,
+                schemas.Resultados.colocacao.isnot(None)
             )
 
             if ano:
                 query = query.filter(
-                    func.extract('year', schemas_lctp.Provas.data) == ano
+                    func.extract('year', schemas.Provas.data) == ano
                 )
 
             # Ordenar por colocação e depois por tempo médio
             query = query.order_by(
-                schemas_lctp.Resultados.colocacao.asc(),
-                schemas_lctp.Resultados.media_tempo.asc()
+                schemas.Resultados.colocacao.asc(),
+                schemas.Resultados.media_tempo.asc()
             )
 
             return query.all()
@@ -621,24 +1003,24 @@ class RepositorioTrio:
         try:
             # Verificar se já existem competidores inscritos nesta prova/categoria
             for comp_id in competidores_ids:
-                inscricao_existente = await self.db.execute(
-                    select(schemas_lctp.IntegrantesTrios).join(
-                        schemas_lctp.Trios
+                inscricao_existente = self.db.execute(
+                    select(schemas.IntegrantesTrios).join(
+                        schemas.Trios
                     ).where(
-                        schemas_lctp.Trios.prova_id == prova_id,
-                        schemas_lctp.Trios.categoria_id == categoria_id,
-                        schemas_lctp.IntegrantesTrios.competidor_id == comp_id
+                        schemas.Trios.prova_id == prova_id,
+                        schemas.Trios.categoria_id == categoria_id,
+                        schemas.IntegrantesTrios.competidor_id == comp_id
                     )
                 ).scalars().first()
                 
-                if inscricao_existente:
-                    competidor = await self.db.execute(
-                        select(schemas_lctp.Competidores).where(
-                            schemas_lctp.Competidores.id == comp_id
+                '''if inscricao_existente:
+                    competidor = self.db.execute(
+                        select(schemas.Competidores).where(
+                            schemas.Competidores.id == comp_id
                         )
                     ).scalars().first()
                     
-                    return False, f"Competidor {competidor.nome} já está inscrito nesta prova/categoria"
+                    return False, f"Competidor {competidor.nome} já está inscrito nesta prova/categoria"'''
 
             # Validar regras do trio
             repo_competidor = RepositorioCompetidor(self.db)
@@ -657,7 +1039,7 @@ class RepositorioTrio:
             trios_criados = []
             
             for trio_info in trios_data:
-                trio_data = models_lctp.TrioPOST(**trio_info['trio'])
+                trio_data = models.TrioPOST(**trio_info['trio'])
                 competidores_ids = trio_info['competidores_ids']
                 
                 trio = await self.post(trio_data, competidores_ids)
@@ -674,8 +1056,8 @@ class RepositorioTrio:
             trios = await self.get_by_prova_categoria(prova_id, categoria_id)
             
             for i, trio in enumerate(trios, 1):
-                stmt = update(schemas_lctp.Trios).where(
-                    schemas_lctp.Trios.id == trio.id
+                stmt = update(schemas.Trios).where(
+                    schemas.Trios.id == trio.id
                 ).values(numero_trio=i)
                 
                 self.db.execute(stmt)

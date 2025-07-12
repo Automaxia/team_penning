@@ -1,6 +1,6 @@
-from sqlalchemy import select, delete, update, func, desc, asc, and_, or_, extract
+from sqlalchemy import select, delete, update, func, desc, asc, and_, or_, extract, text
 from sqlalchemy.orm import Session, joinedload
-from src.database import models_lctp, schemas_lctp
+from src.database import models, schemas
 from src.utils.error_handler import handle_error
 from src.utils.utils_lctp import UtilsLCTP
 from src.utils.config_lctp import ConfigLCTP
@@ -17,70 +17,287 @@ class RepositorioProva:
     def __init__(self, db: Session):
         self.db = db
 
-    # ---------------------- Operações Básicas ----------------------
-
-    async def get_all(self, ativas_apenas: bool = True, ano: Optional[int] = None) -> List[schemas_lctp.Provas]:
-        """Recupera todas as provas"""
+    async def get_all(self, ativas_apenas: bool = True, ano: Optional[int] = None) -> List[Dict]:
+        """Versão que retorna dicionários em vez de objetos schemas"""
+        
+        query_sql = """
+        SELECT 
+            p.id,
+            p.nome,
+            p.data,
+            p.rancho,
+            p.cidade,
+            p.estado,
+            p.valor_inscricao,
+            p.percentual_desconto,
+            p.ativa,
+            p.tipo_copa,
+            p.created_at,
+            p.updated_at,
+            
+            -- Contagens
+            COUNT(DISTINCT t.id) as total_trios,
+            COUNT(DISTINCT it.competidor_id) as total_competidores,
+            COUNT(DISTINCT t.categoria_id) as total_categorias,
+            
+            -- Informações adicionais úteis
+            COUNT(DISTINCT CASE WHEN t.status = 'ativo' THEN t.id END) as trios_ativos,
+            COUNT(DISTINCT CASE WHEN t.status = 'no_time' THEN t.id END) as trios_no_time,
+            COUNT(DISTINCT CASE WHEN t.status = 'desclassificado' THEN t.id END) as trios_desclassificados,
+            
+            -- Status das passadas
+            COUNT(DISTINCT pt.id) as total_passadas,
+            COUNT(DISTINCT CASE WHEN pt.status = 'executada' THEN pt.id END) as passadas_executadas,
+            COUNT(DISTINCT CASE WHEN pt.status = 'pendente' THEN pt.id END) as passadas_pendentes,
+            
+            -- Melhor tempo da prova
+            MIN(pt.tempo_realizado) as melhor_tempo_prova
+            
+        FROM provas p
+        LEFT JOIN trios t ON p.id = t.prova_id
+        LEFT JOIN integrantes_trios it ON t.id = it.trio_id
+        LEFT JOIN passadas_trio pt ON p.id = pt.prova_id
+        
+        WHERE p.deleted_at IS NULL
+        """
+        
+        params = {}
+        
+        if ativas_apenas:
+            query_sql += " AND p.ativa = :ativa"
+            params['ativa'] = True
+        
+        if ano:
+            query_sql += " AND EXTRACT(YEAR FROM p.data) = :ano"
+            params['ano'] = ano
+        
+        query_sql += """
+        GROUP BY 
+            p.id, p.nome, p.data, p.rancho, p.cidade, p.estado,
+            p.valor_inscricao, p.percentual_desconto, p.ativa, p.tipo_copa,
+            p.created_at, p.updated_at
+        ORDER BY p.data DESC
+        """
+        
         try:
-            stmt = select(schemas_lctp.Provas)
+            result = self.db.execute(text(query_sql), params).fetchall()
             
-            if ativas_apenas:
-                stmt = stmt.where(schemas_lctp.Provas.ativa == True)
+            # Converter para lista de dicionários
+            #return [dict(row._mapping) for row in result]
+            return result
             
-            if ano:
-                stmt = stmt.where(extract('year', schemas_lctp.Provas.data) == ano)
-            
-            stmt = stmt.order_by(desc(schemas_lctp.Provas.data))
-            
-            return self.db.execute(stmt).scalars().all()
         except Exception as error:
             handle_error(error, self.get_all)
 
-    async def get_by_id(self, prova_id: int) -> Optional[schemas_lctp.Provas]:
+    async def get_estatisticas(self, prova_id: int) -> Dict[str, Any]:
+        """Obtém estatísticas detalhadas de uma prova específica"""
+        try:
+            # Query para contar trios
+            total_trios = (
+                self.db.query(func.count(schemas.Trios.id))
+                .filter(schemas.Trios.prova_id == prova_id)
+                .scalar() or 0
+            )
+            
+            # Query para contar competidores únicos
+            total_competidores = (
+                self.db.query(func.count(distinct(schemas.TrioCompetidores.competidor_id)))
+                .join(schemas.Trios, schemas.TrioCompetidores.trio_id == schemas.Trios.id)
+                .filter(schemas.Trios.prova_id == prova_id)
+                .scalar() or 0
+            )
+            
+            # Query para contar categorias ativas na prova
+            total_categorias = (
+                self.db.query(func.count(distinct(schemas.Trios.categoria_id)))
+                .filter(
+                    and_(
+                        schemas.Trios.prova_id == prova_id,
+                        schemas.Trios.categoria_id.isnot(None)
+                    )
+                )
+                .scalar() or 0
+            )
+            
+            # Estatísticas por categoria
+            stats_por_categoria = (
+                self.db.query(
+                    schemas.Categorias.nome.label('categoria'),
+                    func.count(schemas.Trios.id).label('total_trios'),
+                    func.count(distinct(schemas.TrioCompetidores.competidor_id)).label('total_competidores')
+                )
+                .select_from(schemas.Trios)
+                .join(schemas.Categorias, schemas.Trios.categoria_id == schemas.Categorias.id)
+                .join(schemas.TrioCompetidores, schemas.TrioCompetidores.trio_id == schemas.Trios.id)
+                .filter(schemas.Trios.prova_id == prova_id)
+                .group_by(schemas.Categorias.id, schemas.Categorias.nome)
+                .all()
+            )
+            
+            # Formatando estatísticas por categoria
+            categorias_stats = []
+            for stat in stats_por_categoria:
+                categorias_stats.append({
+                    'categoria': stat.categoria,
+                    'total_trios': stat.total_trios,
+                    'total_competidores': stat.total_competidores
+                })
+            
+            return {
+                'prova_id': prova_id,
+                'total_trios': total_trios,
+                'total_competidores': total_competidores,
+                'total_categorias': total_categorias,
+                'categorias_detalhes': categorias_stats,
+                'media_competidores_por_trio': round(total_competidores / total_trios, 2) if total_trios > 0 else 0
+            }
+            
+        except Exception as error:
+            handle_error(error, self.get_estatisticas)
+            return {
+                'prova_id': prova_id,
+                'total_trios': 0,
+                'total_competidores': 0,
+                'total_categorias': 0,
+                'categorias_detalhes': [],
+                'media_competidores_por_trio': 0
+            }
+
+
+    async def get_all_com_estatisticas(self, ativas_apenas: bool = True, ano: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Recupera todas as provas com suas estatísticas incluídas"""
+        try:
+            # Buscar todas as provas
+            provas = await self.get_all(ativas_apenas, ano)
+            
+            provas_com_stats = []
+            
+            for prova in provas:
+                # Converter prova para dict
+                prova_dict = {
+                    'id': prova.id,
+                    'nome': prova.nome,
+                    'data': prova.data,
+                    'rancho': prova.rancho,
+                    'cidade': prova.cidade,
+                    'estado': prova.estado,
+                    'valor_inscricao': prova.valor_inscricao,
+                    'percentual_desconto': prova.percentual_desconto,
+                    'tipo_copa': prova.tipo_copa,
+                    'ativa': prova.ativa,
+                    'created_at': prova.created_at,
+                    'updated_at': prova.updated_at
+                }
+                
+                # Adicionar estatísticas
+                stats = await self.get_estatisticas(prova.id)
+                prova_dict.update({
+                    'estatisticas': {
+                        'total_trios': stats['total_trios'],
+                        'total_competidores': stats['total_competidores'],
+                        'total_categorias': stats['total_categorias']
+                    }
+                })
+                
+                provas_com_stats.append(prova_dict)
+            
+            return provas_com_stats
+            
+        except Exception as error:
+            handle_error(error, self.get_all_com_estatisticas)
+            return []
+
+
+    async def get_estatisticas_lote(self, prova_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+        """Obtém estatísticas para múltiplas provas de uma só vez (otimizado)"""
+        try:
+            if not prova_ids:
+                return {}
+            
+            # Query otimizada para buscar todas as estatísticas de uma vez
+            stats_query = (
+                self.db.query(
+                    schemas.Trios.prova_id,
+                    func.count(distinct(schemas.Trios.id)).label('total_trios'),
+                    func.count(distinct(schemas.TrioCompetidores.competidor_id)).label('total_competidores'),
+                    func.count(distinct(schemas.Trios.categoria_id)).label('total_categorias')
+                )
+                .select_from(schemas.Trios)
+                .outerjoin(schemas.TrioCompetidores, schemas.TrioCompetidores.trio_id == schemas.Trios.id)
+                .filter(schemas.Trios.prova_id.in_(prova_ids))
+                .group_by(schemas.Trios.prova_id)
+                .all()
+            )
+            
+            # Organizar resultados por prova_id
+            resultado = {}
+            for stat in stats_query:
+                resultado[stat.prova_id] = {
+                    'total_trios': stat.total_trios,
+                    'total_competidores': stat.total_competidores,
+                    'total_categorias': stat.total_categorias if stat.total_categorias else 0
+                }
+            
+            # Preencher provas sem dados com zeros
+            for prova_id in prova_ids:
+                if prova_id not in resultado:
+                    resultado[prova_id] = {
+                        'total_trios': 0,
+                        'total_competidores': 0,
+                        'total_categorias': 0
+                    }
+            
+            return resultado
+            
+        except Exception as error:
+            handle_error(error, self.get_estatisticas_lote)
+            return {prova_id: {'total_trios': 0, 'total_competidores': 0, 'total_categorias': 0} for prova_id in prova_ids}
+
+    async def get_by_id(self, prova_id: int) -> Optional[schemas.Provas]:
         """Recupera uma prova pelo ID"""
         try:
-            stmt = select(schemas_lctp.Provas).options(
-                joinedload(schemas_lctp.Provas.trios).joinedload(schemas_lctp.Trios.categoria),
-                joinedload(schemas_lctp.Provas.resultados)
-            ).where(schemas_lctp.Provas.id == prova_id)
+            stmt = select(schemas.Provas).options(
+                joinedload(schemas.Provas.trios).joinedload(schemas.Trios.categoria),
+                joinedload(schemas.Provas.resultados)
+            ).where(schemas.Provas.id == prova_id)
             
             return self.db.execute(stmt).scalars().first()
         except Exception as error:
             handle_error(error, self.get_by_id)
 
-    async def get_by_nome(self, nome: str) -> List[schemas_lctp.Provas]:
+    async def get_by_nome(self, nome: str) -> List[schemas.Provas]:
         """Busca provas por nome (busca parcial)"""
         try:
-            stmt = select(schemas_lctp.Provas).where(
-                schemas_lctp.Provas.nome.ilike(f"%{nome}%")
-            ).order_by(desc(schemas_lctp.Provas.data))
+            stmt = select(schemas.Provas).where(
+                schemas.Provas.nome.ilike(f"%{nome}%")
+            ).order_by(desc(schemas.Provas.data))
             
             return self.db.execute(stmt).scalars().all()
         except Exception as error:
             handle_error(error, self.get_by_nome)
 
-    async def get_by_periodo(self, data_inicio: date, data_fim: date) -> List[schemas_lctp.Provas]:
+    async def get_by_periodo(self, data_inicio: date, data_fim: date) -> List[schemas.Provas]:
         """Recupera provas de um período"""
         try:
-            stmt = select(schemas_lctp.Provas).where(
+            stmt = select(schemas.Provas).where(
                 and_(
-                    schemas_lctp.Provas.data >= data_inicio,
-                    schemas_lctp.Provas.data <= data_fim
+                    schemas.Provas.data >= data_inicio,
+                    schemas.Provas.data <= data_fim
                 )
-            ).order_by(schemas_lctp.Provas.data)
+            ).order_by(schemas.Provas.data)
             
             return self.db.execute(stmt).scalars().all()
         except Exception as error:
             handle_error(error, self.get_by_periodo)
 
-    async def post(self, prova_data: models_lctp.ProvaPOST) -> schemas_lctp.Provas:
+    async def post(self, prova_data: models.ProvaPOST) -> schemas.Provas:
         """Cria uma nova prova"""
         try:
             # Validar data da prova
             if prova_data.data < date.today():
                 raise LCTPException("Data da prova não pode ser no passado")
 
-            db_prova = schemas_lctp.Provas(
+            db_prova = schemas.Provas(
                 nome=prova_data.nome,
                 data=prova_data.data,
                 rancho=prova_data.rancho,
@@ -101,7 +318,7 @@ class RepositorioProva:
             self.db.rollback()
             handle_error(error, self.post)
 
-    async def put(self, prova_id: int, prova_data: models_lctp.ProvaPUT) -> Optional[schemas_lctp.Provas]:
+    async def put(self, prova_id: int, prova_data: models.ProvaPUT) -> Optional[schemas.Provas]:
         """Atualiza uma prova"""
         try:
             prova_existente = await self.get_by_id(prova_id)
@@ -119,8 +336,8 @@ class RepositorioProva:
             update_data['updated_at'] = datetime.now(timezone.utc).astimezone(AMSP)
             
             if update_data:
-                stmt = update(schemas_lctp.Provas).where(
-                    schemas_lctp.Provas.id == prova_id
+                stmt = update(schemas.Provas).where(
+                    schemas.Provas.id == prova_id
                 ).values(**update_data)
                 
                 self.db.execute(stmt)
@@ -144,8 +361,8 @@ class RepositorioProva:
 
             if tem_trios or tem_resultados:
                 # Soft delete - apenas marcar como inativa
-                stmt = update(schemas_lctp.Provas).where(
-                    schemas_lctp.Provas.id == prova_id
+                stmt = update(schemas.Provas).where(
+                    schemas.Provas.id == prova_id
                 ).values(
                     ativa=False,
                     deleted_at=datetime.now(timezone.utc).astimezone(AMSP)
@@ -156,8 +373,8 @@ class RepositorioProva:
                 return True
             else:
                 # Delete físico se não tem dependências
-                stmt = delete(schemas_lctp.Provas).where(
-                    schemas_lctp.Provas.id == prova_id
+                stmt = delete(schemas.Provas).where(
+                    schemas.Provas.id == prova_id
                 )
                 
                 self.db.execute(stmt)
@@ -170,59 +387,59 @@ class RepositorioProva:
 
     # ---------------------- Consultas Especializadas ----------------------
 
-    async def get_provas_por_rancho(self, rancho: str, ano: Optional[int] = None) -> List[schemas_lctp.Provas]:
+    async def get_provas_por_rancho(self, rancho: str, ano: Optional[int] = None) -> List[schemas.Provas]:
         """Retorna provas de um rancho específico"""
         try:
-            stmt = select(schemas_lctp.Provas).where(
-                schemas_lctp.Provas.rancho.ilike(f"%{rancho}%")
+            stmt = select(schemas.Provas).where(
+                schemas.Provas.rancho.ilike(f"%{rancho}%")
             )
             
             if ano:
-                stmt = stmt.where(extract('year', schemas_lctp.Provas.data) == ano)
+                stmt = stmt.where(extract('year', schemas.Provas.data) == ano)
             
-            stmt = stmt.order_by(desc(schemas_lctp.Provas.data))
+            stmt = stmt.order_by(desc(schemas.Provas.data))
             
             return self.db.execute(stmt).scalars().all()
         except Exception as error:
             handle_error(error, self.get_provas_por_rancho)
 
-    async def get_provas_por_estado(self, estado: str, ano: Optional[int] = None) -> List[schemas_lctp.Provas]:
+    async def get_provas_por_estado(self, estado: str, ano: Optional[int] = None) -> List[schemas.Provas]:
         """Retorna provas de um estado específico"""
         try:
-            stmt = select(schemas_lctp.Provas).where(
-                schemas_lctp.Provas.estado == estado.upper()
+            stmt = select(schemas.Provas).where(
+                schemas.Provas.estado == estado.upper()
             )
             
             if ano:
-                stmt = stmt.where(extract('year', schemas_lctp.Provas.data) == ano)
+                stmt = stmt.where(extract('year', schemas.Provas.data) == ano)
             
-            stmt = stmt.order_by(desc(schemas_lctp.Provas.data))
+            stmt = stmt.order_by(desc(schemas.Provas.data))
             
             return self.db.execute(stmt).scalars().all()
         except Exception as error:
             handle_error(error, self.get_provas_por_estado)
 
-    async def get_provas_futuras(self) -> List[schemas_lctp.Provas]:
+    async def get_provas_futuras(self) -> List[schemas.Provas]:
         """Retorna provas futuras (a partir de hoje)"""
         try:
-            stmt = select(schemas_lctp.Provas).where(
+            stmt = select(schemas.Provas).where(
                 and_(
-                    schemas_lctp.Provas.data >= date.today(),
-                    schemas_lctp.Provas.ativa == True
+                    schemas.Provas.data >= date.today(),
+                    schemas.Provas.ativa == True
                 )
-            ).order_by(schemas_lctp.Provas.data)
+            ).order_by(schemas.Provas.data)
             
             return self.db.execute(stmt).scalars().all()
         except Exception as error:
             handle_error(error, self.get_provas_futuras)
 
-    async def get_provas_passadas(self, limite: int = 50) -> List[schemas_lctp.Provas]:
+    async def get_provas_passadas(self, limite: int = 50) -> List[schemas.Provas]:
         """Retorna provas passadas (mais recentes primeiro)"""
         try:
-            stmt = select(schemas_lctp.Provas).where(
-                schemas_lctp.Provas.data < date.today()
+            stmt = select(schemas.Provas).where(
+                schemas.Provas.data < date.today()
             ).order_by(
-                desc(schemas_lctp.Provas.data)
+                desc(schemas.Provas.data)
             ).limit(limite)
             
             return self.db.execute(stmt).scalars().all()
@@ -237,16 +454,16 @@ class RepositorioProva:
                 return {}
 
             # Contar trios por categoria
-            trios_por_categoria = await self.db.execute(
+            trios_por_categoria = self.db.execute(
                 select(
-                    schemas_lctp.Categorias.nome,
-                    func.count(schemas_lctp.Trios.id).label('total_trios')
+                    schemas.Categorias.nome,
+                    func.count(schemas.Trios.id).label('total_trios')
                 ).join(
-                    schemas_lctp.Trios
+                    schemas.Trios
                 ).where(
-                    schemas_lctp.Trios.prova_id == prova_id
+                    schemas.Trios.prova_id == prova_id
                 ).group_by(
-                    schemas_lctp.Categorias.id, schemas_lctp.Categorias.nome
+                    schemas.Categorias.id, schemas.Categorias.nome
                 )
             ).all()
 
@@ -255,9 +472,9 @@ class RepositorioProva:
             total_competidores = total_trios * 3
 
             # Análise de resultados
-            resultados = await self.db.execute(
-                select(schemas_lctp.Resultados).where(
-                    schemas_lctp.Resultados.prova_id == prova_id
+            resultados = self.db.execute(
+                select(schemas.Resultados).where(
+                    schemas.Resultados.prova_id == prova_id
                 )
             ).scalars().all()
 
@@ -289,27 +506,27 @@ class RepositorioProva:
         """Gera ranking de uma prova (geral ou por categoria)"""
         try:
             query = self.db.query(
-                schemas_lctp.Resultados,
-                schemas_lctp.Trios,
-                schemas_lctp.Categorias.nome.label('categoria_nome')
+                schemas.Resultados,
+                schemas.Trios,
+                schemas.Categorias.nome.label('categoria_nome')
             ).join(
-                schemas_lctp.Trios,
-                schemas_lctp.Resultados.trio_id == schemas_lctp.Trios.id
+                schemas.Trios,
+                schemas.Resultados.trio_id == schemas.Trios.id
             ).join(
-                schemas_lctp.Categorias,
-                schemas_lctp.Trios.categoria_id == schemas_lctp.Categorias.id
+                schemas.Categorias,
+                schemas.Trios.categoria_id == schemas.Categorias.id
             ).options(
-                joinedload(schemas_lctp.Trios.integrantes).joinedload(schemas_lctp.IntegrantesTrios.competidor)
+                joinedload(schemas.Trios.integrantes).joinedload(schemas.IntegrantesTrios.competidor)
             ).filter(
-                schemas_lctp.Resultados.prova_id == prova_id,
-                schemas_lctp.Resultados.colocacao.isnot(None)
+                schemas.Resultados.prova_id == prova_id,
+                schemas.Resultados.colocacao.isnot(None)
             )
 
             if categoria_id:
-                query = query.filter(schemas_lctp.Trios.categoria_id == categoria_id)
+                query = query.filter(schemas.Trios.categoria_id == categoria_id)
 
             # Ordenar por colocação
-            query = query.order_by(schemas_lctp.Resultados.colocacao.asc())
+            query = query.order_by(schemas.Resultados.colocacao.asc())
 
             resultados = query.all()
             
@@ -347,9 +564,9 @@ class RepositorioProva:
             
             for prova in provas_ano:
                 # Contar trios da prova
-                trios_prova = await self.db.execute(
-                    select(func.count(schemas_lctp.Trios.id)).where(
-                        schemas_lctp.Trios.prova_id == prova.id
+                trios_prova = self.db.execute(
+                    select(func.count(schemas.Trios.id)).where(
+                        schemas.Trios.prova_id == prova.id
                     )
                 ).scalar()
                 
@@ -361,9 +578,9 @@ class RepositorioProva:
                     provas_realizadas += 1
                     
                     # Somar premiação
-                    premiacao_prova = await self.db.execute(
-                        select(func.sum(schemas_lctp.Resultados.premiacao_valor)).where(
-                            schemas_lctp.Resultados.prova_id == prova.id
+                    premiacao_prova = self.db.execute(
+                        select(func.sum(schemas.Resultados.premiacao_valor)).where(
+                            schemas.Resultados.prova_id == prova.id
                         )
                     ).scalar()
                     
@@ -396,7 +613,7 @@ class RepositorioProva:
         except Exception as error:
             handle_error(error, self.gerar_relatorio_anual)
 
-    async def get_calendario_provas(self, ano: int) -> Dict[str, List[schemas_lctp.Provas]]:
+    async def get_calendario_provas(self, ano: int) -> Dict[str, List[schemas.Provas]]:
         """Retorna calendário de provas organizadas por mês"""
         try:
             provas_ano = await self.get_all(ativas_apenas=True, ano=ano)
@@ -426,9 +643,9 @@ class RepositorioProva:
     async def _prova_tem_trios(self, prova_id: int) -> bool:
         """Verifica se a prova tem trios inscritos"""
         try:
-            count = await self.db.execute(
-                select(func.count(schemas_lctp.Trios.id)).where(
-                    schemas_lctp.Trios.prova_id == prova_id
+            count = self.db.execute(
+                select(func.count(schemas.Trios.id)).where(
+                    schemas.Trios.prova_id == prova_id
                 )
             ).scalar()
             
@@ -439,9 +656,9 @@ class RepositorioProva:
     async def _prova_tem_resultados(self, prova_id: int) -> bool:
         """Verifica se a prova tem resultados"""
         try:
-            count = await self.db.execute(
-                select(func.count(schemas_lctp.Resultados.id)).where(
-                    schemas_lctp.Resultados.prova_id == prova_id
+            count = self.db.execute(
+                select(func.count(schemas.Resultados.id)).where(
+                    schemas.Resultados.prova_id == prova_id
                 )
             ).scalar()
             
@@ -471,7 +688,7 @@ class RepositorioProva:
         except Exception as error:
             handle_error(error, self.pode_alterar_prova)
 
-    async def duplicar_prova(self, prova_id: int, nova_data: date, novo_nome: Optional[str] = None) -> schemas_lctp.Provas:
+    async def duplicar_prova(self, prova_id: int, nova_data: date, novo_nome: Optional[str] = None) -> schemas.Provas:
         """Duplica uma prova para uma nova data"""
         try:
             prova_original = await self.get_by_id(prova_id)
@@ -479,7 +696,7 @@ class RepositorioProva:
                 raise LCTPException("Prova original não encontrada")
 
             # Criar nova prova baseada na original
-            nova_prova_data = models_lctp.ProvaPOST(
+            nova_prova_data = models.ProvaPOST(
                 nome=novo_nome or f"{prova_original.nome} - CÓPIA",
                 data=nova_data,
                 rancho=prova_original.rancho,
@@ -497,26 +714,26 @@ class RepositorioProva:
             self.db.rollback()
             handle_error(error, self.duplicar_prova)
 
-    async def get_provas_similares(self, prova_id: int, limite: int = 5) -> List[schemas_lctp.Provas]:
+    async def get_provas_similares(self, prova_id: int, limite: int = 5) -> List[schemas.Provas]:
         """Encontra provas similares (mesmo rancho/cidade)"""
         try:
             prova = await self.get_by_id(prova_id)
             if not prova:
                 return []
 
-            stmt = select(schemas_lctp.Provas).where(
+            stmt = select(schemas.Provas).where(
                 and_(
-                    schemas_lctp.Provas.id != prova_id,
+                    schemas.Provas.id != prova_id,
                     or_(
-                        schemas_lctp.Provas.rancho == prova.rancho,
+                        schemas.Provas.rancho == prova.rancho,
                         and_(
-                            schemas_lctp.Provas.cidade == prova.cidade,
-                            schemas_lctp.Provas.estado == prova.estado
+                            schemas.Provas.cidade == prova.cidade,
+                            schemas.Provas.estado == prova.estado
                         )
                     )
                 )
             ).order_by(
-                desc(schemas_lctp.Provas.data)
+                desc(schemas.Provas.data)
             ).limit(limite)
 
             return self.db.execute(stmt).scalars().all()
@@ -528,30 +745,30 @@ class RepositorioProva:
     async def exportar_provas(self, ano: Optional[int] = None, estado: Optional[str] = None) -> List[Dict[str, Any]]:
         """Exporta dados das provas em formato estruturado"""
         try:
-            stmt = select(schemas_lctp.Provas)
+            stmt = select(schemas.Provas)
             
             if ano:
-                stmt = stmt.where(extract('year', schemas_lctp.Provas.data) == ano)
+                stmt = stmt.where(extract('year', schemas.Provas.data) == ano)
             
             if estado:
-                stmt = stmt.where(schemas_lctp.Provas.estado == estado.upper())
+                stmt = stmt.where(schemas.Provas.estado == estado.upper())
             
-            stmt = stmt.order_by(desc(schemas_lctp.Provas.data))
+            stmt = stmt.order_by(desc(schemas.Provas.data))
             
             provas = self.db.execute(stmt).scalars().all()
             
             export_data = []
             for prova in provas:
                 # Buscar estatísticas básicas
-                total_trios = await self.db.execute(
-                    select(func.count(schemas_lctp.Trios.id)).where(
-                        schemas_lctp.Trios.prova_id == prova.id
+                total_trios = self.db.execute(
+                    select(func.count(schemas.Trios.id)).where(
+                        schemas.Trios.prova_id == prova.id
                     )
                 ).scalar()
 
-                total_premiacao = await self.db.execute(
-                    select(func.sum(schemas_lctp.Resultados.premiacao_valor)).where(
-                        schemas_lctp.Resultados.prova_id == prova.id
+                total_premiacao = self.db.execute(
+                    select(func.sum(schemas.Resultados.premiacao_valor)).where(
+                        schemas.Resultados.prova_id == prova.id
                     )
                 ).scalar()
 

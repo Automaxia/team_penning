@@ -1,6 +1,6 @@
 from sqlalchemy import select, delete, update, func, desc, asc, and_, or_, extract
 from sqlalchemy.orm import Session, joinedload
-from src.database import models_lctp, schemas_lctp
+from src.database import models, schemas
 from src.utils.error_handler import handle_error
 from src.utils.utils_lctp import UtilsLCTP
 from src.utils.config_lctp import ConfigLCTP
@@ -20,31 +20,31 @@ class RepositorioPontuacao:
 
     # ---------------------- Operações Básicas ----------------------
 
-    async def get_by_id(self, pontuacao_id: int) -> Optional[schemas_lctp.Pontuacao]:
+    async def get_by_id(self, pontuacao_id: int) -> Optional[schemas.Pontuacao]:
         """Recupera uma pontuação pelo ID"""
         try:
-            stmt = select(schemas_lctp.Pontuacao).options(
-                joinedload(schemas_lctp.Pontuacao.competidor),
-                joinedload(schemas_lctp.Pontuacao.prova),
-                joinedload(schemas_lctp.Pontuacao.categoria)
-            ).where(schemas_lctp.Pontuacao.id == pontuacao_id)
+            stmt = select(schemas.Pontuacao).options(
+                joinedload(schemas.Pontuacao.competidor),
+                joinedload(schemas.Pontuacao.prova),
+                joinedload(schemas.Pontuacao.categoria)
+            ).where(schemas.Pontuacao.id == pontuacao_id)
             
             return self.db.execute(stmt).scalars().first()
         except Exception as error:
             handle_error(error, self.get_by_id)
 
-    async def get_by_competidor_prova(self, competidor_id: int, prova_id: int, categoria_id: int) -> Optional[schemas_lctp.Pontuacao]:
+    async def get_by_competidor_prova(self, competidor_id: int, prova_id: int, categoria_id: int) -> Optional[schemas.Pontuacao]:
         """Recupera pontuação específica de um competidor em uma prova/categoria"""
         try:
-            stmt = select(schemas_lctp.Pontuacao).options(
-                joinedload(schemas_lctp.Pontuacao.competidor),
-                joinedload(schemas_lctp.Pontuacao.prova),
-                joinedload(schemas_lctp.Pontuacao.categoria)
+            stmt = select(schemas.Pontuacao).options(
+                joinedload(schemas.Pontuacao.competidor),
+                joinedload(schemas.Pontuacao.prova),
+                joinedload(schemas.Pontuacao.categoria)
             ).where(
                 and_(
-                    schemas_lctp.Pontuacao.competidor_id == competidor_id,
-                    schemas_lctp.Pontuacao.prova_id == prova_id,
-                    schemas_lctp.Pontuacao.categoria_id == categoria_id
+                    schemas.Pontuacao.competidor_id == competidor_id,
+                    schemas.Pontuacao.prova_id == prova_id,
+                    schemas.Pontuacao.categoria_id == categoria_id
                 )
             )
             
@@ -52,59 +52,59 @@ class RepositorioPontuacao:
         except Exception as error:
             handle_error(error, self.get_by_competidor_prova)
 
-    async def get_by_competidor(self, competidor_id: int, ano: Optional[int] = None, categoria_id: Optional[int] = None) -> List[schemas_lctp.Pontuacao]:
+    async def get_by_competidor(self, competidor_id: int, ano: Optional[int] = None, categoria_id: Optional[int] = None) -> List[schemas.Pontuacao]:
         """Recupera todas as pontuações de um competidor"""
         try:
-            stmt = select(schemas_lctp.Pontuacao).options(
-                joinedload(schemas_lctp.Pontuacao.prova),
-                joinedload(schemas_lctp.Pontuacao.categoria)
-            ).where(schemas_lctp.Pontuacao.competidor_id == competidor_id)
+            stmt = select(schemas.Pontuacao).options(
+                joinedload(schemas.Pontuacao.prova),
+                joinedload(schemas.Pontuacao.categoria)
+            ).where(schemas.Pontuacao.competidor_id == competidor_id)
             
             if ano:
-                stmt = stmt.join(schemas_lctp.Provas).where(
-                    extract('year', schemas_lctp.Provas.data) == ano
+                stmt = stmt.join(schemas.Provas).where(
+                    extract('year', schemas.Provas.data) == ano
                 )
             
             if categoria_id:
-                stmt = stmt.where(schemas_lctp.Pontuacao.categoria_id == categoria_id)
+                stmt = stmt.where(schemas.Pontuacao.categoria_id == categoria_id)
             
-            stmt = stmt.order_by(desc(schemas_lctp.Pontuacao.created_at))
+            stmt = stmt.order_by(desc(schemas.Pontuacao.created_at))
             
             return self.db.execute(stmt).scalars().all()
         except Exception as error:
             handle_error(error, self.get_by_competidor)
 
-    async def get_by_prova(self, prova_id: int, categoria_id: Optional[int] = None) -> List[schemas_lctp.Pontuacao]:
+    async def get_by_prova(self, prova_id: int, categoria_id: Optional[int] = None) -> List[schemas.Pontuacao]:
         """Recupera pontuações de uma prova"""
         try:
-            stmt = select(schemas_lctp.Pontuacao).options(
-                joinedload(schemas_lctp.Pontuacao.competidor),
-                joinedload(schemas_lctp.Pontuacao.categoria)
-            ).where(schemas_lctp.Pontuacao.prova_id == prova_id)
+            stmt = select(schemas.Pontuacao).options(
+                joinedload(schemas.Pontuacao.competidor),
+                joinedload(schemas.Pontuacao.categoria)
+            ).where(schemas.Pontuacao.prova_id == prova_id)
             
             if categoria_id:
-                stmt = stmt.where(schemas_lctp.Pontuacao.categoria_id == categoria_id)
+                stmt = stmt.where(schemas.Pontuacao.categoria_id == categoria_id)
             
-            stmt = stmt.order_by(desc(schemas_lctp.Pontuacao.pontos_total))
+            stmt = stmt.order_by(desc(schemas.Pontuacao.pontos_total))
             
             return self.db.execute(stmt).scalars().all()
         except Exception as error:
             handle_error(error, self.get_by_prova)
 
-    async def get_by_categoria(self, categoria_id: int, ano: Optional[int] = None, limite: Optional[int] = None) -> List[schemas_lctp.Pontuacao]:
+    async def get_by_categoria(self, categoria_id: int, ano: Optional[int] = None, limite: Optional[int] = None) -> List[schemas.Pontuacao]:
         """Recupera pontuações de uma categoria"""
         try:
-            stmt = select(schemas_lctp.Pontuacao).options(
-                joinedload(schemas_lctp.Pontuacao.competidor),
-                joinedload(schemas_lctp.Pontuacao.prova)
-            ).where(schemas_lctp.Pontuacao.categoria_id == categoria_id)
+            stmt = select(schemas.Pontuacao).options(
+                joinedload(schemas.Pontuacao.competidor),
+                joinedload(schemas.Pontuacao.prova)
+            ).where(schemas.Pontuacao.categoria_id == categoria_id)
             
             if ano:
-                stmt = stmt.join(schemas_lctp.Provas).where(
-                    extract('year', schemas_lctp.Provas.data) == ano
+                stmt = stmt.join(schemas.Provas).where(
+                    extract('year', schemas.Provas.data) == ano
                 )
             
-            stmt = stmt.order_by(desc(schemas_lctp.Pontuacao.pontos_total))
+            stmt = stmt.order_by(desc(schemas.Pontuacao.pontos_total))
             
             if limite:
                 stmt = stmt.limit(limite)
@@ -113,7 +113,7 @@ class RepositorioPontuacao:
         except Exception as error:
             handle_error(error, self.get_by_categoria)
 
-    async def post(self, pontuacao_data: models_lctp.PontuacaoPOST) -> schemas_lctp.Pontuacao:
+    async def post(self, pontuacao_data: models.PontuacaoPOST) -> schemas.Pontuacao:
         """Cria uma nova pontuação"""
         try:
             # Verificar se já existe pontuação para este competidor/prova/categoria
@@ -126,7 +126,7 @@ class RepositorioPontuacao:
             if pontuacao_existente:
                 raise PontuacaoException("Já existe pontuação para este competidor nesta prova/categoria")
 
-            db_pontuacao = schemas_lctp.Pontuacao(
+            db_pontuacao = schemas.Pontuacao(
                 competidor_id=pontuacao_data.competidor_id,
                 prova_id=pontuacao_data.prova_id,
                 categoria_id=pontuacao_data.categoria_id,
@@ -151,7 +151,7 @@ class RepositorioPontuacao:
             self.db.rollback()
             handle_error(error, self.post)
 
-    async def put(self, pontuacao_id: int, pontuacao_data: models_lctp.PontuacaoPUT) -> Optional[schemas_lctp.Pontuacao]:
+    async def put(self, pontuacao_id: int, pontuacao_data: models.PontuacaoPUT) -> Optional[schemas.Pontuacao]:
         """Atualiza uma pontuação"""
         try:
             pontuacao_existente = await self.get_by_id(pontuacao_id)
@@ -162,8 +162,8 @@ class RepositorioPontuacao:
             update_data = {k: v for k, v in pontuacao_data.model_dump().items() if v is not None}
             
             if update_data:
-                stmt = update(schemas_lctp.Pontuacao).where(
-                    schemas_lctp.Pontuacao.id == pontuacao_id
+                stmt = update(schemas.Pontuacao).where(
+                    schemas.Pontuacao.id == pontuacao_id
                 ).values(**update_data)
                 
                 self.db.execute(stmt)
@@ -188,8 +188,8 @@ class RepositorioPontuacao:
             if not pontuacao:
                 raise PontuacaoException(f"Pontuação com ID {pontuacao_id} não encontrada")
 
-            stmt = delete(schemas_lctp.Pontuacao).where(
-                schemas_lctp.Pontuacao.id == pontuacao_id
+            stmt = delete(schemas.Pontuacao).where(
+                schemas.Pontuacao.id == pontuacao_id
             )
             
             self.db.execute(stmt)
@@ -202,14 +202,14 @@ class RepositorioPontuacao:
 
     # ---------------------- Cálculos Automáticos ----------------------
 
-    async def calcular_pontuacao_resultado(self, resultado: schemas_lctp.Resultados) -> Dict[str, Any]:
+    async def calcular_pontuacao_resultado(self, resultado: schemas.Resultados) -> Dict[str, Any]:
         """Calcula pontuação baseada em um resultado e cria/atualiza registros"""
         try:
             # Buscar trio com integrantes
-            trio = await self.db.execute(
-                select(schemas_lctp.Trios).options(
-                    joinedload(schemas_lctp.Trios.integrantes).joinedload(schemas_lctp.IntegrantesTrios.competidor)
-                ).where(schemas_lctp.Trios.id == resultado.trio_id)
+            trio = self.db.execute(
+                select(schemas.Trios).options(
+                    joinedload(schemas.Trios.integrantes).joinedload(schemas.IntegrantesTrios.competidor)
+                ).where(schemas.Trios.id == resultado.trio_id)
             ).scalars().first()
 
             if not trio:
@@ -244,12 +244,12 @@ class RepositorioPontuacao:
 
                 if pontuacao_existente:
                     # Atualizar existente
-                    pontuacao_put = models_lctp.PontuacaoPUT(**dados_pontuacao)
+                    pontuacao_put = models.PontuacaoPUT(**dados_pontuacao)
                     pontuacao = await self.put(pontuacao_existente.id, pontuacao_put)
                     pontuacoes_atualizadas.append(pontuacao)
                 else:
                     # Criar nova
-                    pontuacao_post = models_lctp.PontuacaoPOST(
+                    pontuacao_post = models.PontuacaoPOST(
                         competidor_id=integrante.competidor_id,
                         prova_id=resultado.prova_id,
                         categoria_id=trio.categoria_id,
@@ -275,9 +275,9 @@ class RepositorioPontuacao:
         """Recalcula toda a pontuação de uma prova"""
         try:
             # Buscar resultados da prova
-            resultados = await self.db.execute(
-                select(schemas_lctp.Resultados).where(
-                    schemas_lctp.Resultados.prova_id == prova_id
+            resultados = self.db.execute(
+                select(schemas.Resultados).where(
+                    schemas.Resultados.prova_id == prova_id
                 )
             ).scalars().all()
 
@@ -285,9 +285,9 @@ class RepositorioPontuacao:
                 raise PontuacaoException("Nenhum resultado encontrado para esta prova")
 
             # Remover pontuações existentes da prova
-            await self.db.execute(
-                delete(schemas_lctp.Pontuacao).where(
-                    schemas_lctp.Pontuacao.prova_id == prova_id
+            self.db.execute(
+                delete(schemas.Pontuacao).where(
+                    schemas.Pontuacao.prova_id == prova_id
                 )
             )
 
@@ -319,35 +319,35 @@ class RepositorioPontuacao:
         try:
             # Query base
             stmt = select(
-                schemas_lctp.Pontuacao.competidor_id,
-                schemas_lctp.Competidores.nome,
-                schemas_lctp.Competidores.handicap,
-                schemas_lctp.Competidores.cidade,
-                schemas_lctp.Competidores.estado,
-                func.sum(schemas_lctp.Pontuacao.pontos_total).label('total_pontos'),
-                func.count(schemas_lctp.Pontuacao.id).label('total_provas'),
-                func.avg(schemas_lctp.Pontuacao.pontos_total).label('media_pontos'),
-                func.min(schemas_lctp.Pontuacao.colocacao).label('melhor_colocacao'),
-                func.sum(schemas_lctp.Pontuacao.premiacao_valor).label('premiacao_total')
+                schemas.Pontuacao.competidor_id,
+                schemas.Competidores.nome,
+                schemas.Competidores.handicap,
+                schemas.Competidores.cidade,
+                schemas.Competidores.estado,
+                func.sum(schemas.Pontuacao.pontos_total).label('total_pontos'),
+                func.count(schemas.Pontuacao.id).label('total_provas'),
+                func.avg(schemas.Pontuacao.pontos_total).label('media_pontos'),
+                func.min(schemas.Pontuacao.colocacao).label('melhor_colocacao'),
+                func.sum(schemas.Pontuacao.premiacao_valor).label('premiacao_total')
             ).join(
-                schemas_lctp.Competidores,
-                schemas_lctp.Pontuacao.competidor_id == schemas_lctp.Competidores.id
+                schemas.Competidores,
+                schemas.Pontuacao.competidor_id == schemas.Competidores.id
             )
 
             if ano:
-                stmt = stmt.join(schemas_lctp.Provas).where(
-                    extract('year', schemas_lctp.Provas.data) == ano
+                stmt = stmt.join(schemas.Provas).where(
+                    extract('year', schemas.Provas.data) == ano
                 )
 
             if categoria_id:
-                stmt = stmt.where(schemas_lctp.Pontuacao.categoria_id == categoria_id)
+                stmt = stmt.where(schemas.Pontuacao.categoria_id == categoria_id)
 
             stmt = stmt.group_by(
-                schemas_lctp.Pontuacao.competidor_id,
-                schemas_lctp.Competidores.nome,
-                schemas_lctp.Competidores.handicap,
-                schemas_lctp.Competidores.cidade,
-                schemas_lctp.Competidores.estado
+                schemas.Pontuacao.competidor_id,
+                schemas.Competidores.nome,
+                schemas.Competidores.handicap,
+                schemas.Competidores.cidade,
+                schemas.Competidores.estado
             ).order_by(
                 desc('total_pontos')
             ).limit(limite)
@@ -473,15 +473,15 @@ class RepositorioPontuacao:
         """Gera relatório completo de pontuação do ano"""
         try:
             # Buscar todas as pontuações do ano
-            pontuacoes = await self.db.execute(
-                select(schemas_lctp.Pontuacao).options(
-                    joinedload(schemas_lctp.Pontuacao.competidor),
-                    joinedload(schemas_lctp.Pontuacao.prova),
-                    joinedload(schemas_lctp.Pontuacao.categoria)
+            pontuacoes = self.db.execute(
+                select(schemas.Pontuacao).options(
+                    joinedload(schemas.Pontuacao.competidor),
+                    joinedload(schemas.Pontuacao.prova),
+                    joinedload(schemas.Pontuacao.categoria)
                 ).join(
-                    schemas_lctp.Provas
+                    schemas.Provas
                 ).where(
-                    extract('year', schemas_lctp.Provas.data) == ano
+                    extract('year', schemas.Provas.data) == ano
                 )
             ).scalars().all()
 
@@ -530,9 +530,9 @@ class RepositorioPontuacao:
             # Campeões por categoria (top 3)
             campeoes = {}
             for categoria_nome in por_categoria.keys():
-                categoria = await self.db.execute(
-                    select(schemas_lctp.Categorias).where(
-                        schemas_lctp.Categorias.nome == categoria_nome
+                categoria = self.db.execute(
+                    select(schemas.Categorias).where(
+                        schemas.Categorias.nome == categoria_nome
                     )
                 ).scalars().first()
                 
@@ -565,26 +565,26 @@ class RepositorioPontuacao:
     async def exportar_pontuacoes(self, filtros: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """Exporta pontuações em formato estruturado"""
         try:
-            stmt = select(schemas_lctp.Pontuacao).options(
-                joinedload(schemas_lctp.Pontuacao.competidor),
-                joinedload(schemas_lctp.Pontuacao.prova),
-                joinedload(schemas_lctp.Pontuacao.categoria)
+            stmt = select(schemas.Pontuacao).options(
+                joinedload(schemas.Pontuacao.competidor),
+                joinedload(schemas.Pontuacao.prova),
+                joinedload(schemas.Pontuacao.categoria)
             )
 
             # Aplicar filtros se fornecidos
             if filtros:
                 if 'ano' in filtros:
-                    stmt = stmt.join(schemas_lctp.Provas).where(
-                        extract('year', schemas_lctp.Provas.data) == filtros['ano']
+                    stmt = stmt.join(schemas.Provas).where(
+                        extract('year', schemas.Provas.data) == filtros['ano']
                     )
                 
                 if 'categoria_id' in filtros:
-                    stmt = stmt.where(schemas_lctp.Pontuacao.categoria_id == filtros['categoria_id'])
+                    stmt = stmt.where(schemas.Pontuacao.categoria_id == filtros['categoria_id'])
                 
                 if 'competidor_id' in filtros:
-                    stmt = stmt.where(schemas_lctp.Pontuacao.competidor_id == filtros['competidor_id'])
+                    stmt = stmt.where(schemas.Pontuacao.competidor_id == filtros['competidor_id'])
 
-            stmt = stmt.order_by(desc(schemas_lctp.Pontuacao.created_at))
+            stmt = stmt.order_by(desc(schemas.Pontuacao.created_at))
 
             pontuacoes = self.db.execute(stmt).scalars().all()
 
@@ -618,13 +618,13 @@ class RepositorioPontuacao:
     async def validar_consistencia_pontuacao(self, prova_id: Optional[int] = None) -> Dict[str, Any]:
         """Valida consistência dos dados de pontuação"""
         try:
-            query = self.db.query(schemas_lctp.Pontuacao).options(
-                joinedload(schemas_lctp.Pontuacao.competidor),
-                joinedload(schemas_lctp.Pontuacao.prova)
+            query = self.db.query(schemas.Pontuacao).options(
+                joinedload(schemas.Pontuacao.competidor),
+                joinedload(schemas.Pontuacao.prova)
             )
 
             if prova_id:
-                query = query.filter(schemas_lctp.Pontuacao.prova_id == prova_id)
+                query = query.filter(schemas.Pontuacao.prova_id == prova_id)
 
             pontuacoes = query.all()
 
@@ -693,8 +693,8 @@ class RepositorioPontuacao:
             pontuacao.calcular_pontos_total()
 
             # Atualizar no banco
-            stmt = update(schemas_lctp.Pontuacao).where(
-                schemas_lctp.Pontuacao.id == pontuacao_id
+            stmt = update(schemas.Pontuacao).where(
+                schemas.Pontuacao.id == pontuacao_id
             ).values(
                 pontos_colocacao=pontuacao.pontos_colocacao,
                 pontos_premiacao=pontuacao.pontos_premiacao,
@@ -721,15 +721,15 @@ class RepositorioPontuacao:
     async def get_historico_competidor_categoria(self, competidor_id: int, categoria_id: int) -> Dict[str, Any]:
         """Retorna histórico completo de um competidor em uma categoria"""
         try:
-            pontuacoes = await self.db.execute(
-                select(schemas_lctp.Pontuacao).options(
-                    joinedload(schemas_lctp.Pontuacao.prova)
+            pontuacoes = self.db.execute(
+                select(schemas.Pontuacao).options(
+                    joinedload(schemas.Pontuacao.prova)
                 ).where(
                     and_(
-                        schemas_lctp.Pontuacao.competidor_id == competidor_id,
-                        schemas_lctp.Pontuacao.categoria_id == categoria_id
+                        schemas.Pontuacao.competidor_id == competidor_id,
+                        schemas.Pontuacao.categoria_id == categoria_id
                     )
-                ).order_by(schemas_lctp.Pontuacao.created_at)
+                ).order_by(schemas.Pontuacao.created_at)
             ).scalars().all()
 
             if not pontuacoes:
@@ -784,16 +784,16 @@ class RepositorioPontuacao:
         """Calcula médias de pontuação de uma categoria"""
         try:
             stmt = select(
-                func.avg(schemas_lctp.Pontuacao.pontos_total).label('media_pontos_total'),
-                func.avg(schemas_lctp.Pontuacao.pontos_colocacao).label('media_pontos_colocacao'),
-                func.avg(schemas_lctp.Pontuacao.pontos_premiacao).label('media_pontos_premiacao'),
-                func.count(schemas_lctp.Pontuacao.id).label('total_pontuacoes'),
-                func.count(func.distinct(schemas_lctp.Pontuacao.competidor_id)).label('competidores_unicos')
-            ).where(schemas_lctp.Pontuacao.categoria_id == categoria_id)
+                func.avg(schemas.Pontuacao.pontos_total).label('media_pontos_total'),
+                func.avg(schemas.Pontuacao.pontos_colocacao).label('media_pontos_colocacao'),
+                func.avg(schemas.Pontuacao.pontos_premiacao).label('media_pontos_premiacao'),
+                func.count(schemas.Pontuacao.id).label('total_pontuacoes'),
+                func.count(func.distinct(schemas.Pontuacao.competidor_id)).label('competidores_unicos')
+            ).where(schemas.Pontuacao.categoria_id == categoria_id)
 
             if ano:
-                stmt = stmt.join(schemas_lctp.Provas).where(
-                    extract('year', schemas_lctp.Provas.data) == ano
+                stmt = stmt.join(schemas.Provas).where(
+                    extract('year', schemas.Provas.data) == ano
                 )
 
             resultado = self.db.execute(stmt).first()

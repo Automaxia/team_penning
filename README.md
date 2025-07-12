@@ -43,8 +43,8 @@ Sistema completo para gerenciamento de competições de team roping seguindo as 
 ```
 src/
 ├── database/
-│   ├── schemas_lctp.py      # Modelos SQLAlchemy
-│   └── models_lctp.py       # Modelos Pydantic
+│   ├── schemas.py      # Modelos SQLAlchemy
+│   └── models.py       # Modelos Pydantic
 ├── repositorios/
 │   ├── competidor.py        # Repositório de competidores
 │   ├── trio.py              # Repositório de trios
@@ -145,13 +145,13 @@ PASSOS PARA IMPLEMENTAR O SISTEMA LCTP:
 
 2. BANCO DE DADOS
 
-   - Adicione o schemas_lctp.py na pasta src/database/
+   - Adicione o schemas.py na pasta src/database/
    - Execute: alembic revision --autogenerate -m "Adicionar tabelas LCTP"
    - Execute: alembic upgrade head
 
 3. MODELOS E REPOSITÓRIOS
 
-   - Adicione models_lctp.py na pasta src/database/
+   - Adicione models.py na pasta src/database/
    - Crie os repositórios na pasta src/repositorios/
    - Adicione os utilitários na pasta src/utils/
 

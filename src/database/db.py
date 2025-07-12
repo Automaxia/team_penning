@@ -16,6 +16,7 @@ try:
     PASSWORD = config["PASSWORD"]
 
     SQLALCHEMY_DATABASE_URL = f"postgresql+psycopg2://{USER}:{PASSWORD}@{HOST}:{PORT}/{DATABASE}"
+    
     #SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
     connect_args = {
         "keepalives": config['KEEPALIVES'],

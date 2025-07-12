@@ -26,7 +26,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: dockerfile
     container_name: fisioterapia-api
     restart: always
     environment:

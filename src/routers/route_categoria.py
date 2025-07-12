@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime, date
 from src.utils.auth_utils import obter_usuario_logado
 from src.database.db import get_db
-from src.database import models_lctp, schemas_lctp
+from src.database import models, schemas
 from src.utils.api_response import success_response, error_response
 from src.repositorios.categoria import RepositorioCategoria
 from src.utils.route_error_handler import RouteErrorHandler
@@ -13,7 +13,7 @@ router = APIRouter(route_class=RouteErrorHandler)
 
 # -------------------------- Operações Básicas CRUD --------------------------
 
-@router.get("/categoria/listar", tags=['Categoria'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/categoria/listar", tags=['Categoria'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def listar_categorias(
     ativas_apenas: bool = Query(default=True, description="Listar apenas categorias ativas"),
     db: Session = Depends(get_db),
@@ -27,7 +27,7 @@ async def listar_categorias(
     
     return success_response(categorias, f'{len(categorias)} categorias encontradas')
 
-@router.get("/categoria/consultar/{categoria_id}", tags=['Categoria'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/categoria/consultar/{categoria_id}", tags=['Categoria'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def consultar_categoria(
     categoria_id: int = Path(..., description="ID da categoria"),
     db: Session = Depends(get_db),
@@ -41,9 +41,9 @@ async def consultar_categoria(
     
     return success_response(categoria)
 
-@router.post("/categoria/criar", tags=['Categoria'], status_code=status.HTTP_201_CREATED, response_model=models_lctp.ApiResponse)
+@router.post("/categoria/criar", tags=['Categoria'], status_code=status.HTTP_201_CREATED, response_model=models.ApiResponse)
 async def criar_categoria(
-    categoria_data: models_lctp.CategoriaPOST,
+    categoria_data: models.CategoriaPOST,
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
 ):
@@ -55,10 +55,10 @@ async def criar_categoria(
     except ValueError as e:
         return error_response(message=str(e))
 
-@router.put("/categoria/atualizar/{categoria_id}", tags=['Categoria'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.put("/categoria/atualizar/{categoria_id}", tags=['Categoria'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def atualizar_categoria(
     categoria_id: int = Path(..., description="ID da categoria"),
-    categoria_data: models_lctp.CategoriaPUT = Body(...),
+    categoria_data: models.CategoriaPUT = Body(...),
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
 ):
@@ -73,7 +73,7 @@ async def atualizar_categoria(
     except ValueError as e:
         return error_response(message=str(e))
 
-@router.delete("/categoria/deletar/{categoria_id}", tags=['Categoria'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.delete("/categoria/deletar/{categoria_id}", tags=['Categoria'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def excluir_categoria(
     categoria_id: int = Path(..., description="ID da categoria"),
     db: Session = Depends(get_db),
@@ -92,9 +92,9 @@ async def excluir_categoria(
 
 # -------------------------- Consultas por Tipo --------------------------
 
-@router.get("/categoria/tipo/{tipo_categoria}", tags=['Categoria Consulta'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/categoria/tipo/{tipo_categoria}", tags=['Categoria Consulta'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def listar_por_tipo(
-    tipo_categoria: schemas_lctp.TipoCategoria = Path(..., description="Tipo da categoria"),
+    tipo_categoria: schemas.TipoCategoria = Path(..., description="Tipo da categoria"),
     ativas_apenas: bool = Query(default=True, description="Apenas categorias ativas"),
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
@@ -107,7 +107,7 @@ async def listar_por_tipo(
     
     return success_response(categorias, f'{len(categorias)} categorias do tipo {tipo_categoria.value}')
 
-@router.get("/categoria/nome/{nome}", tags=['Categoria Consulta'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/categoria/nome/{nome}", tags=['Categoria Consulta'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def buscar_por_nome(
     nome: str = Path(..., description="Nome da categoria"),
     db: Session = Depends(get_db),
@@ -121,7 +121,7 @@ async def buscar_por_nome(
     
     return success_response(categoria)
 
-@router.get("/categoria/sorteio", tags=['Categoria Consulta'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/categoria/sorteio", tags=['Categoria Consulta'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def categorias_com_sorteio(
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
@@ -136,7 +136,7 @@ async def categorias_com_sorteio(
 
 # -------------------------- Validações --------------------------
 
-@router.post("/categoria/validar-trio", tags=['Categoria Validação'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.post("/categoria/validar-trio", tags=['Categoria Validação'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def validar_trio_categoria(
     dados: Dict[str, Any] = Body(..., example={
         "categoria_id": 1,
@@ -165,7 +165,7 @@ async def validar_trio_categoria(
     except Exception as e:
         return error_response(message=f'Erro na validação: {str(e)}')
 
-@router.get("/categoria/competidor/{competidor_id}", tags=['Categoria Validação'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/categoria/competidor/{competidor_id}", tags=['Categoria Validação'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def categorias_do_competidor(
     competidor_id: int = Path(..., description="ID do competidor"),
     db: Session = Depends(get_db),
@@ -181,7 +181,7 @@ async def categorias_do_competidor(
 
 # -------------------------- Estatísticas e Relatórios --------------------------
 
-@router.get("/categoria/estatisticas/{categoria_id}", tags=['Categoria Estatísticas'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/categoria/estatisticas/{categoria_id}", tags=['Categoria Estatísticas'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def estatisticas_categoria(
     categoria_id: int = Path(..., description="ID da categoria"),
     ano: Optional[int] = Query(default=None, description="Ano específico (opcional)"),
@@ -196,7 +196,7 @@ async def estatisticas_categoria(
     
     return success_response(estatisticas)
 
-@router.get("/categoria/relatorio/participacao", tags=['Categoria Relatórios'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/categoria/relatorio/participacao", tags=['Categoria Relatórios'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def relatorio_participacao_categorias(
     ano: Optional[int] = Query(default=None, description="Ano específico (opcional)"),
     db: Session = Depends(get_db),
@@ -210,7 +210,7 @@ async def relatorio_participacao_categorias(
     except Exception as e:
         return error_response(message=f'Erro ao gerar relatório: {str(e)}')
 
-@router.get("/categoria/prova/{prova_id}", tags=['Categoria Consulta'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/categoria/prova/{prova_id}", tags=['Categoria Consulta'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def categorias_por_prova(
     prova_id: int = Path(..., description="ID da prova"),
     db: Session = Depends(get_db),
@@ -226,7 +226,7 @@ async def categorias_por_prova(
 
 # -------------------------- Configuração e Exportação --------------------------
 
-@router.get("/categoria/exportar", tags=['Categoria Exportação'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/categoria/exportar", tags=['Categoria Exportação'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def exportar_configuracao_categorias(
     formato: str = Query(default="json", regex="^(json|csv)$", description="Formato de exportação"),
     db: Session = Depends(get_db),
@@ -246,9 +246,9 @@ async def exportar_configuracao_categorias(
     except Exception as e:
         return error_response(message=f'Erro na exportação: {str(e)}')
 
-@router.post("/categoria/importar", tags=['Categoria Importação'], status_code=status.HTTP_201_CREATED, response_model=models_lctp.ApiResponse)
+@router.post("/categoria/importar", tags=['Categoria Importação'], status_code=status.HTTP_201_CREATED, response_model=models.ApiResponse)
 async def importar_categorias(
-    categorias_data: List[models_lctp.CategoriaPOST] = Body(...),
+    categorias_data: List[models.CategoriaPOST] = Body(...),
     sobrescrever: bool = Query(default=False, description="Sobrescrever categorias existentes"),
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
@@ -268,7 +268,7 @@ async def importar_categorias(
                 
                 if categoria_existente and sobrescrever:
                     # Atualizar existente
-                    categoria_put = models_lctp.CategoriaPUT(
+                    categoria_put = models.CategoriaPUT(
                         nome=categoria_data.nome,
                         tipo=categoria_data.tipo,
                         descricao=categoria_data.descricao,
@@ -310,7 +310,7 @@ async def importar_categorias(
 
 # -------------------------- Utilitários --------------------------
 
-@router.get("/categoria/tipos", tags=['Categoria Utilitários'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/categoria/tipos", tags=['Categoria Utilitários'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def listar_tipos_categoria(
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
@@ -323,14 +323,14 @@ async def listar_tipos_categoria(
             'nome': tipo.name,
             'descricao': _get_descricao_tipo(tipo)
         }
-        for tipo in schemas_lctp.TipoCategoria
+        for tipo in schemas.TipoCategoria
     ]
     
     return success_response(tipos, 'Tipos de categoria disponíveis')
 
-@router.get("/categoria/regras/{tipo_categoria}", tags=['Categoria Utilitários'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/categoria/regras/{tipo_categoria}", tags=['Categoria Utilitários'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def regras_por_tipo(
-    tipo_categoria: schemas_lctp.TipoCategoria = Path(..., description="Tipo da categoria"),
+    tipo_categoria: schemas.TipoCategoria = Path(..., description="Tipo da categoria"),
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
 ):
@@ -349,9 +349,9 @@ async def regras_por_tipo(
         'descricao': _get_descricao_tipo(tipo_categoria)
     })
 
-@router.post("/categoria/validar-regras", tags=['Categoria Validação'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.post("/categoria/validar-regras", tags=['Categoria Validação'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def validar_regras_categoria(
-    categoria_data: models_lctp.CategoriaPOST,
+    categoria_data: models.CategoriaPOST,
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
 ):
@@ -373,7 +373,7 @@ async def validar_regras_categoria(
             'mensagem': str(e)
         })
 
-@router.get("/categoria/resumo", tags=['Categoria Estatísticas'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/categoria/resumo", tags=['Categoria Estatísticas'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def resumo_categorias(
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
@@ -408,7 +408,7 @@ async def resumo_categorias(
             'inativas': inativas,
             'com_sorteio': com_sorteio,
             'por_tipo': por_tipo,
-            'tipos_disponiveis': len(schemas_lctp.TipoCategoria)
+            'tipos_disponiveis': len(schemas.TipoCategoria)
         }
         
         return success_response(resumo)
@@ -417,14 +417,14 @@ async def resumo_categorias(
 
 # -------------------------- Funções Auxiliares --------------------------
 
-def _get_descricao_tipo(tipo: schemas_lctp.TipoCategoria) -> str:
+def _get_descricao_tipo(tipo: schemas.TipoCategoria) -> str:
     """Retorna descrição do tipo de categoria"""
     descricoes = {
-        schemas_lctp.TipoCategoria.BABY: "Categoria para crianças até 12 anos com sorteio completo",
-        schemas_lctp.TipoCategoria.KIDS: "Categoria para jovens de 13 a 17 anos com sorteio parcial",
-        schemas_lctp.TipoCategoria.MIRIM: "Categoria com limite de idade total por trio (máx 36 anos)",
-        schemas_lctp.TipoCategoria.FEMININA: "Categoria exclusiva para mulheres",
-        schemas_lctp.TipoCategoria.ABERTA: "Categoria sem restrições de idade ou handicap",
-        schemas_lctp.TipoCategoria.HANDICAP: "Categoria com limite de handicap total por trio"
+        schemas.TipoCategoria.BABY: "Categoria para crianças até 12 anos com sorteio completo",
+        schemas.TipoCategoria.KIDS: "Categoria para jovens de 13 a 17 anos com sorteio parcial",
+        schemas.TipoCategoria.MIRIM: "Categoria com limite de idade total por trio (máx 36 anos)",
+        schemas.TipoCategoria.FEMININA: "Categoria exclusiva para mulheres",
+        schemas.TipoCategoria.ABERTA: "Categoria sem restrições de idade ou handicap",
+        schemas.TipoCategoria.SOMA11: "Categoria com limite de handicap total por trio"
     }
     return descricoes.get(tipo, "Descrição não disponível")

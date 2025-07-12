@@ -1,11 +1,12 @@
-# route_competidor.py
+# route_competidor.py - VERSÃO CORRIGIDA
 from fastapi import APIRouter, status, Depends, HTTPException, Path, Query, Body
 from typing import List, Optional, Dict, Any
+from sqlalchemy import select, distinct, func
 from sqlalchemy.orm import Session
 from datetime import datetime, date
 from src.utils.auth_utils import obter_usuario_logado
 from src.database.db import get_db
-from src.database import models_lctp
+from src.database import models, schemas
 from src.utils.api_response import success_response, error_response
 from src.repositorios.competidor import RepositorioCompetidor
 from src.utils.route_error_handler import RouteErrorHandler
@@ -14,7 +15,7 @@ router = APIRouter(route_class=RouteErrorHandler)
 
 # -------------------------- Rotas Básicas de Competidores --------------------------
 
-@router.get("/competidor/pesquisar", tags=['Competidor'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/competidor/pesquisar", tags=['Competidor'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def pesquisar_competidores(
     nome: Optional[str] = Query(default=None, max_length=300, description="Nome do competidor"),
     handicap: Optional[int] = Query(default=None, ge=0, le=7, description="Handicap do competidor"),
@@ -23,13 +24,16 @@ async def pesquisar_competidores(
     sexo: Optional[str] = Query(default=None, regex="^[MF]$", description="Sexo do competidor (M/F)"),
     idade_min: Optional[int] = Query(default=None, ge=0, le=100, description="Idade mínima"),
     idade_max: Optional[int] = Query(default=None, ge=0, le=100, description="Idade máxima"),
+    categoria_id: Optional[int] = Query(default=None, description="ID da categoria"),
+    categoria_tipo: Optional[str] = Query(default=None, description="Tipo da categoria"),
+    apenas_com_categoria: Optional[bool] = Query(default=None, description="Apenas com categoria definida"),
     ativo: Optional[bool] = Query(default=True, description="Status ativo do competidor"),
     pagina: Optional[int] = Query(default=0, ge=0, description="Número da página"),
     tamanho_pagina: Optional[int] = Query(default=0, ge=0, description="Tamanho da página"),
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
 ):
-    """Pesquisa competidores com filtros diversos"""
+    """Pesquisa competidores com filtros diversos incluindo categoria"""
     
     competidores = await RepositorioCompetidor(db).get_all(
         nome=nome,
@@ -39,6 +43,9 @@ async def pesquisar_competidores(
         sexo=sexo,
         idade_min=idade_min,
         idade_max=idade_max,
+        categoria_id=categoria_id,
+        categoria_tipo=categoria_tipo,
+        apenas_com_categoria=apenas_com_categoria,
         ativo=ativo,
         pagina=pagina,
         tamanho_pagina=tamanho_pagina
@@ -49,13 +56,13 @@ async def pesquisar_competidores(
     
     return success_response(competidores)
 
-@router.post("/competidor/salvar", tags=['Competidor'], status_code=status.HTTP_201_CREATED, response_model=models_lctp.ApiResponse)
+@router.post("/competidor/salvar", tags=['Competidor'], status_code=status.HTTP_201_CREATED, response_model=models.ApiResponse)
 async def criar_competidor(
-    competidor: models_lctp.CompetidorPOST,
+    competidor: models.CompetidorPOST,
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
 ):
-    """Cria um novo competidor"""
+    """Cria um novo competidor com categoria automática se não informada"""
     
     try:
         novo_competidor = await RepositorioCompetidor(db).post(competidor)
@@ -63,10 +70,10 @@ async def criar_competidor(
     except ValueError as e:
         return error_response(message=str(e))
 
-@router.put("/competidor/atualizar/{competidor_id}", tags=['Competidor'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.put("/competidor/atualizar/{competidor_id:int}", tags=['Competidor'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def atualizar_competidor(
     competidor_id: int = Path(..., description="ID do competidor"),
-    competidor: models_lctp.CompetidorPUT = Body(...),
+    competidor: models.CompetidorPUT = Body(...),
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
 ):
@@ -79,25 +86,21 @@ async def atualizar_competidor(
     
     try:
         competidor_atualizado = await RepositorioCompetidor(db).put(competidor_id, competidor)
+        
+        # ⭐ ADICIONAR ESTAS LINHAS APÓS A ATUALIZAÇÃO:
+        # Auto-criar controles se tem categoria
+        if hasattr(competidor, 'categoria_id') and competidor.categoria_id:
+            try:
+                await auto_criar_controles_participacao(competidor_id, competidor.categoria_id, db)
+            except Exception as e:
+                print(f"Aviso: Erro ao auto-criar controles: {e}")
+                # Não falha a atualização por causa disso
+        
         return success_response(competidor_atualizado, 'Competidor atualizado com sucesso')
     except ValueError as e:
         return error_response(message=str(e))
 
-@router.get("/competidor/consultar/{competidor_id}", tags=['Competidor'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
-async def consultar_competidor(
-    competidor_id: int = Path(..., description="ID do competidor"),
-    db: Session = Depends(get_db),
-    usuario = Depends(obter_usuario_logado)
-):
-    """Consulta um competidor específico por ID"""
-    
-    competidor = await RepositorioCompetidor(db).get_by_id(competidor_id)
-    if not competidor:
-        return error_response(message='Competidor não encontrado!')
-    
-    return success_response(competidor)
-
-@router.delete("/competidor/deletar/{competidor_id}", tags=['Competidor'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.delete("/competidor/deletar/{competidor_id:int}", tags=['Competidor'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def excluir_competidor(
     competidor_id: int = Path(..., description="ID do competidor"),
     db: Session = Depends(get_db),
@@ -115,23 +118,93 @@ async def excluir_competidor(
     await RepositorioCompetidor(db).delete(competidor_id)
     return success_response(None, 'Competidor excluído com sucesso')
 
-# -------------------------- Consultas Específicas --------------------------
+# ========================== ROTAS ESPECÍFICAS PRIMEIRO ==========================
 
-@router.get("/competidor/por-handicap/{handicap}", tags=['Competidor'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
-async def listar_por_handicap(
-    handicap: int = Path(..., ge=0, le=7, description="Handicap desejado"),
+# Estatísticas gerais (deve vir antes das rotas com parâmetros)
+@router.get("/competidor/estatisticas/geral", tags=['Competidor Estatísticas'], 
+           status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def estatisticas_gerais(
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
 ):
-    """Lista competidores por handicap específico"""
+    """Recupera estatísticas gerais do sistema incluindo categorias"""
     
-    competidores = await RepositorioCompetidor(db).get_by_handicap(handicap)
-    if not competidores:
-        return error_response(message=f'Nenhum competidor encontrado com handicap {handicap}!')
-    
-    return success_response(competidores)
+    try:
+        repo = RepositorioCompetidor(db)
+        
+        # Total de competidores ativos
+        total_ativos = len(await repo.get_all(ativo=True))
+        
+        # Distribuição por handicap
+        distribuicao_handicap = {}
+        for h in range(8):  # 0 a 7
+            competidores_h = await repo.get_by_handicap(h)
+            distribuicao_handicap[f'handicap_{h}'] = len(competidores_h)
+        
+        # Distribuição por sexo
+        femininos = await repo.get_femininos()
+        masculinos = await repo.get_all(sexo='M', ativo=True)
+        
+        # Estatísticas por faixa etária
+        faixas_etarias = {
+            'baby': len(await repo.get_by_categoria_idade(0, 12)),
+            'kids': len(await repo.get_by_categoria_idade(13, 17)),
+            'adulto': len(await repo.get_by_categoria_idade(18, 100))
+        }
+        
+        # Estatísticas por categoria
+        stats_categoria = await repo.get_estatisticas_por_categoria()
+        
+        # Competidores sem categoria
+        sem_categoria = await repo.get_sem_categoria()
+        
+        estatisticas = {
+            'total_competidores': total_ativos,
+            'distribuicao_handicap': distribuicao_handicap,
+            'distribuicao_sexo': {
+                'feminino': len(femininos),
+                'masculino': len(masculinos)
+            },
+            'distribuicao_faixa_etaria': faixas_etarias,
+            'distribuicao_categorias': stats_categoria,
+            'competidores_sem_categoria': len(sem_categoria)
+        }
+        
+        return success_response(estatisticas)
+    except Exception as e:
+        return error_response(message=f'Erro ao calcular estatísticas: {str(e)}')
 
-@router.get("/competidor/femininos", tags=['Competidor'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/competidor/estatisticas/categoria", tags=['Competidor Estatísticas'], 
+           status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def estatisticas_por_categoria(
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Recupera estatísticas detalhadas por categoria"""
+    
+    try:
+        stats = await RepositorioCompetidor(db).get_estatisticas_por_categoria()
+        return success_response(stats)
+    except Exception as e:
+        return error_response(message=f'Erro ao calcular estatísticas por categoria: {str(e)}')
+
+@router.get("/competidor/campeoes-handicap", tags=['Competidor Ranking'], 
+           status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def campeoes_por_handicap(
+    ano: Optional[int] = Query(default=None, description="Ano específico (opcional)"),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Identifica campeões por handicap para Copa dos Campeões"""
+    
+    campeoes = await RepositorioCompetidor(db).get_campeoes_por_handicap(ano)
+    if not campeoes:
+        return error_response(message='Nenhum campeão encontrado!')
+    
+    return success_response(campeoes)
+
+@router.get("/competidor/femininos", tags=['Competidor'], 
+           status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def listar_femininos(
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
@@ -144,7 +217,21 @@ async def listar_femininos(
     
     return success_response(competidores)
 
-@router.get("/competidor/por-faixa-etaria", tags=['Competidor'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/competidor/sem-categoria", tags=['Competidor Categoria'], 
+           status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def listar_sem_categoria(
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Lista competidores sem categoria definida"""
+    
+    competidores = await RepositorioCompetidor(db).get_sem_categoria()
+    if not competidores:
+        return error_response(message='Todos os competidores possuem categoria definida!')
+    
+    return success_response(competidores)
+
+@router.get("/competidor/por-faixa-etaria", tags=['Competidor'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def listar_por_faixa_etaria(
     idade_min: int = Query(..., ge=0, le=100, description="Idade mínima"),
     idade_max: int = Query(..., ge=0, le=100, description="Idade máxima"),
@@ -162,54 +249,57 @@ async def listar_por_faixa_etaria(
     
     return success_response(competidores)
 
-@router.get("/competidor/elegivel-categoria/{categoria_id}", tags=['Competidor'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
-async def listar_elegiveis_categoria(
-    categoria_id: int = Path(..., description="ID da categoria"),
-    excluir_ids: Optional[List[int]] = Query(default=None, description="IDs de competidores a excluir"),
+@router.post("/competidor/atualizar-categorias-automaticamente", tags=['Competidor Categoria'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def atualizar_categorias_automaticamente(
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
 ):
-    """Lista competidores elegíveis para uma categoria específica"""
+    """Atualiza categorias automaticamente para competidores sem categoria"""
     
-    competidores = await RepositorioCompetidor(db).buscar_para_trio(categoria_id, excluir_ids or [])
-    if not competidores:
-        return error_response(message='Nenhum competidor elegível encontrado para esta categoria!')
-    
-    return success_response(competidores)
+    try:
+        total_atualizados = await RepositorioCompetidor(db).atualizar_categorias_automaticamente()
+        return success_response(
+            {'total_atualizados': total_atualizados},
+            f'{total_atualizados} competidores tiveram categorias atualizadas automaticamente'
+        )
+    except Exception as e:
+        return error_response(message=str(e))
 
-@router.get("/competidor/disponiveis-prova/{prova_id}/{categoria_id}", tags=['Competidor'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
-async def listar_disponiveis_prova(
-    prova_id: int = Path(..., description="ID da prova"),
-    categoria_id: int = Path(..., description="ID da categoria"),
+# ========================== ROTAS COM PARÂMETROS (COM CONVERSORES) ==========================
+
+@router.get("/competidor/consultar/{competidor_id:int}", tags=['Competidor'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def consultar_competidor(
+    competidor_id: int = Path(..., description="ID do competidor"),
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
 ):
-    """Lista competidores disponíveis para uma prova (não inscritos ainda)"""
+    """Consulta um competidor específico por ID"""
     
-    competidores = await RepositorioCompetidor(db).buscar_disponiveis_para_prova(prova_id, categoria_id)
-    if not competidores:
-        return error_response(message='Nenhum competidor disponível para esta prova/categoria!')
+    competidor = await RepositorioCompetidor(db).get_by_id(competidor_id)
+    if not competidor:
+        return error_response(message='Competidor não encontrado!')
     
-    return success_response(competidores)
+    return success_response(competidor)
 
-# -------------------------- Ranking e Estatísticas --------------------------
-
-@router.get("/competidor/ranking/categoria/{categoria_id}", tags=['Competidor Ranking'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
-async def ranking_por_categoria(
-    categoria_id: int = Path(..., description="ID da categoria"),
-    ano: Optional[int] = Query(default=None, description="Ano específico (opcional)"),
+@router.get("/competidor/detalhes/{competidor_id:int}", tags=['Competidor'], 
+           status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def detalhes_competidor_completo(
+    competidor_id: int = Path(..., description="ID do competidor"),
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
 ):
-    """Gera ranking de competidores por categoria"""
+    """Recupera detalhes completos do competidor incluindo categoria"""
     
-    ranking = await RepositorioCompetidor(db).get_ranking_por_categoria(categoria_id, ano)
-    if not ranking:
-        return error_response(message='Nenhum dado encontrado para gerar o ranking!')
+    repo = RepositorioCompetidor(db)
+    competidor_completo = await repo.get_competidor_com_categoria(competidor_id)
     
-    return success_response(ranking)
+    if not competidor_completo:
+        return error_response(message='Competidor não encontrado!')
+    
+    return success_response(competidor_completo)
 
-@router.get("/competidor/estatisticas/{competidor_id}", tags=['Competidor Ranking'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/competidor/estatisticas/{competidor_id:int}", tags=['Competidor Ranking'], 
+           status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def estatisticas_competidor(
     competidor_id: int = Path(..., description="ID do competidor"),
     db: Session = Depends(get_db),
@@ -228,21 +318,147 @@ async def estatisticas_competidor(
     
     return success_response(estatisticas)
 
-@router.get("/competidor/campeoes-handicap", tags=['Competidor Ranking'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
-async def campeoes_por_handicap(
+@router.get("/competidor/categoria/{categoria_id:int}", tags=['Competidor Categoria'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def listar_por_categoria(
+    categoria_id: int = Path(..., description="ID da categoria"),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Lista competidores de uma categoria específica"""
+    
+    competidores = await RepositorioCompetidor(db).get_by_categoria(categoria_id)
+    if not competidores:
+        return error_response(message='Nenhum competidor encontrado nesta categoria!')
+    
+    return success_response(competidores)
+
+@router.put("/competidor/atualizar-categoria/{competidor_id:int}", tags=['Competidor Categoria'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def atualizar_categoria_competidor(
+    competidor_id: int = Path(..., description="ID do competidor"),
+    categoria_data: Dict[str, Any] = Body(..., example={"categoria_id": 1}),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Atualiza apenas a categoria de um competidor"""
+    
+    categoria_id = categoria_data.get('categoria_id')
+    
+    # Verificar se o competidor existe
+    competidor = await RepositorioCompetidor(db).get_by_id(competidor_id)
+    if not competidor:
+        return error_response(message='Competidor não encontrado!')
+    
+    try:
+        competidor_atualizado = await RepositorioCompetidor(db).atualizar_categoria(competidor_id, categoria_id)
+        return success_response(competidor_atualizado, 'Categoria atualizada com sucesso')
+    except Exception as e:
+        return error_response(message=str(e))
+
+@router.get("/competidor/sugerir-categoria/{competidor_id:int}", tags=['Competidor Categoria'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def sugerir_categoria_competidor(
+    competidor_id: int = Path(..., description="ID do competidor"),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Sugere categorias para um competidor baseado nas regras"""
+    
+    # Verificar se o competidor existe
+    competidor = await RepositorioCompetidor(db).get_by_id(competidor_id)
+    if not competidor:
+        return error_response(message='Competidor não encontrado!')
+    
+    sugestoes = await RepositorioCompetidor(db).sugerir_categoria(competidor_id)
+    if not sugestoes:
+        return error_response(message='Nenhuma categoria disponível para este competidor!')
+    
+    return success_response(sugestoes)
+
+@router.post("/competidor/migrar-categorias", tags=['Competidor Categoria'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def migrar_categorias_lote(
+    dados: Dict[str, Any] = Body(..., example={
+        "competidores_ids": [1, 2, 3],
+        "categoria_destino_id": 1
+    }),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Migra múltiplos competidores para uma categoria"""
+    
+    competidores_ids = dados.get('competidores_ids', [])
+    categoria_destino_id = dados.get('categoria_destino_id')
+    
+    if not competidores_ids or not categoria_destino_id:
+        return error_response(message='Deve informar competidores_ids e categoria_destino_id')
+    
+    try:
+        total_migrados = await RepositorioCompetidor(db).migrar_categorias(competidores_ids, categoria_destino_id)
+        return success_response(
+            {'total_migrados': total_migrados}, 
+            f'{total_migrados} competidores migrados com sucesso'
+        )
+    except Exception as e:
+        return error_response(message=str(e))
+
+@router.get("/competidor/por-handicap/{handicap:int}", tags=['Competidor'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def listar_por_handicap(
+    handicap: int = Path(..., ge=0, le=7, description="Handicap desejado"),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Lista competidores por handicap específico"""
+    
+    competidores = await RepositorioCompetidor(db).get_by_handicap(handicap)
+    if not competidores:
+        return error_response(message=f'Nenhum competidor encontrado com handicap {handicap}!')
+    
+    return success_response(competidores)
+
+@router.get("/competidor/elegivel-categoria/{categoria_id:int}", tags=['Competidor'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def listar_elegiveis_categoria(
+    categoria_id: int = Path(..., description="ID da categoria"),
+    excluir_ids: Optional[List[int]] = Query(default=None, description="IDs de competidores a excluir"),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Lista competidores elegíveis para uma categoria específica"""
+    
+    competidores = RepositorioCompetidor(db).buscar_para_trio(categoria_id, excluir_ids or [])
+    if not competidores:
+        return error_response(message='Nenhum competidor elegível encontrado para esta categoria!')
+    
+    return success_response(competidores)
+
+@router.get("/competidor/disponiveis-prova/{prova_id:int}/{categoria_id:int}", tags=['Competidor'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def listar_disponiveis_prova(
+    prova_id: int = Path(..., description="ID da prova"),
+    categoria_id: int = Path(..., description="ID da categoria"),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Lista competidores disponíveis para uma prova (não inscritos ainda)"""
+    
+    competidores = await RepositorioCompetidor(db).buscar_disponiveis_para_prova(prova_id, categoria_id, False)
+    if not competidores:
+        return error_response(message='Nenhum competidor disponível para esta prova/categoria!')
+    
+    return success_response(competidores)
+
+@router.get("/competidor/ranking/categoria/{categoria_id:int}", tags=['Competidor Ranking'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def ranking_por_categoria(
+    categoria_id: int = Path(..., description="ID da categoria"),
     ano: Optional[int] = Query(default=None, description="Ano específico (opcional)"),
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
 ):
-    """Identifica campeões por handicap para Copa dos Campeões"""
+    """Gera ranking de competidores por categoria"""
     
-    campeoes = await RepositorioCompetidor(db).get_campeoes_por_handicap(ano)
-    if not campeoes:
-        return error_response(message='Nenhum campeão encontrado!')
+    ranking = await RepositorioCompetidor(db).get_ranking_por_categoria(categoria_id, ano)
+    if not ranking:
+        return error_response(message='Nenhum dado encontrado para gerar o ranking!')
     
-    return success_response(campeoes)
+    return success_response(ranking)
 
-@router.get("/competidor/performance/{competidor_id}", tags=['Competidor Ranking'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/competidor/performance/{competidor_id:int}", tags=['Competidor Ranking'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def analise_performance(
     competidor_id: int = Path(..., description="ID do competidor"),
     limite_provas: int = Query(default=10, ge=1, le=50, description="Número de provas para análise"),
@@ -262,7 +478,7 @@ async def analise_performance(
     
     return success_response(analise)
 
-@router.get("/competidor/sugestoes-trio/{competidor_id}/{categoria_id}", tags=['Competidor Trio'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/competidor/sugestoes-trio/{competidor_id:int}/{categoria_id:int}", tags=['Competidor Trio'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def sugestoes_trio(
     competidor_id: int = Path(..., description="ID do competidor base"),
     categoria_id: int = Path(..., description="ID da categoria"),
@@ -282,9 +498,25 @@ async def sugestoes_trio(
     
     return success_response(sugestoes)
 
+@router.get("/competidor/historico-handicap/{competidor_id:int}", tags=['Competidor Relatórios'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def historico_handicap(
+    competidor_id: int = Path(..., description="ID do competidor"),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Recupera histórico de mudanças de handicap"""
+    
+    # Verificar se o competidor existe
+    competidor = await RepositorioCompetidor(db).get_by_id(competidor_id)
+    if not competidor:
+        return error_response(message='Competidor não encontrado!')
+    
+    historico = await RepositorioCompetidor(db).get_historico_handicap(competidor_id)
+    return success_response(historico)
+
 # -------------------------- Validações --------------------------
 
-@router.post("/competidor/validar-trio", tags=['Competidor Trio'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.post("/competidor/validar-trio", tags=['Competidor Trio'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def validar_trio(
     dados: Dict[str, Any] = Body(..., example={
         "competidores_ids": [1, 2, 3],
@@ -313,9 +545,37 @@ async def validar_trio(
         'categoria_id': categoria_id
     })
 
+@router.post("/competidor/validar-categoria", tags=['Competidor Categoria'], 
+            status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def validar_categoria_competidor(
+    dados: Dict[str, Any] = Body(..., example={
+        "competidor_id": 1,
+        "categoria_id": 1
+    }),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Valida se um competidor pode ser associado a uma categoria"""
+    
+    competidor_id = dados.get('competidor_id')
+    categoria_id = dados.get('categoria_id')
+    
+    if not competidor_id or not categoria_id:
+        return error_response(message='Deve informar competidor_id e categoria_id')
+    
+    repo = RepositorioCompetidor(db)
+    valido, mensagem = await repo.validar_categoria_competidor(competidor_id, categoria_id)
+    
+    return success_response({
+        'valido': valido,
+        'mensagem': mensagem,
+        'competidor_id': competidor_id,
+        'categoria_id': categoria_id
+    })
+
 # -------------------------- Relatórios --------------------------
 
-@router.get("/competidor/relatorio/participacao", tags=['Competidor Relatórios'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/competidor/relatorio/participacao", tags=['Competidor Relatórios'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def relatorio_participacao(
     data_inicio: date = Query(..., description="Data de início do período"),
     data_fim: date = Query(..., description="Data de fim do período"),
@@ -333,27 +593,11 @@ async def relatorio_participacao(
     
     return success_response(relatorio)
 
-@router.get("/competidor/historico-handicap/{competidor_id}", tags=['Competidor Relatórios'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
-async def historico_handicap(
-    competidor_id: int = Path(..., description="ID do competidor"),
-    db: Session = Depends(get_db),
-    usuario = Depends(obter_usuario_logado)
-):
-    """Recupera histórico de mudanças de handicap"""
-    
-    # Verificar se o competidor existe
-    competidor = await RepositorioCompetidor(db).get_by_id(competidor_id)
-    if not competidor:
-        return error_response(message='Competidor não encontrado!')
-    
-    historico = await RepositorioCompetidor(db).get_historico_handicap(competidor_id)
-    return success_response(historico)
-
 # -------------------------- Operações em Lote --------------------------
 
-@router.post("/competidor/criar-multiplos", tags=['Competidor Lote'], status_code=status.HTTP_201_CREATED, response_model=models_lctp.ApiResponse)
+@router.post("/competidor/criar-multiplos", tags=['Competidor Lote'], status_code=status.HTTP_201_CREATED, response_model=models.ApiResponse)
 async def criar_multiplos_competidores(
-    competidores: List[models_lctp.CompetidorPOST] = Body(..., min_items=1),
+    competidores: List[models.CompetidorPOST] = Body(..., min_items=1),
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
 ):
@@ -369,7 +613,7 @@ async def criar_multiplos_competidores(
     except ValueError as e:
         return error_response(message=str(e))
 
-@router.put("/competidor/atualizar-handicaps", tags=['Competidor Lote'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.put("/competidor/atualizar-handicaps", tags=['Competidor Lote'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def atualizar_handicaps_lote(
     updates: List[Dict[str, Any]] = Body(..., example=[
         {"id": 1, "handicap": 3},
@@ -397,56 +641,19 @@ async def atualizar_handicaps_lote(
     except Exception as e:
         return error_response(message=str(e))
 
-# -------------------------- Estatísticas Gerais --------------------------
-
-@router.get("/competidor/estatisticas/geral", tags=['Competidor Estatísticas'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
-async def estatisticas_gerais(
-    db: Session = Depends(get_db),
-    usuario = Depends(obter_usuario_logado)
-):
-    """Recupera estatísticas gerais do sistema"""
-    
-    try:
-        # Total de competidores ativos
-        total_ativos = len(await RepositorioCompetidor(db).get_all(ativo=True))
-        
-        # Distribuição por handicap
-        distribuicao_handicap = {}
-        for h in range(8):  # 0 a 7
-            competidores_h = await RepositorioCompetidor(db).get_by_handicap(h)
-            distribuicao_handicap[f'handicap_{h}'] = len(competidores_h)
-        
-        # Distribuição por sexo
-        femininos = await RepositorioCompetidor(db).get_femininos()
-        masculinos = await RepositorioCompetidor(db).get_all(sexo='M', ativo=True)
-        
-        # Estatísticas por faixa etária
-        faixas_etarias = {
-            'baby': len(await RepositorioCompetidor(db).get_by_categoria_idade(0, 12)),
-            'kids': len(await RepositorioCompetidor(db).get_by_categoria_idade(13, 17)),
-            'adulto': len(await RepositorioCompetidor(db).get_by_categoria_idade(18, 100))
-        }
-        
-        estatisticas = {
-            'total_competidores': total_ativos,
-            'distribuicao_handicap': distribuicao_handicap,
-            'distribuicao_sexo': {
-                'feminino': len(femininos),
-                'masculino': len(masculinos)
-            },
-            'distribuicao_faixa_etaria': faixas_etarias
-        }
-        
-        return success_response(estatisticas)
-    except Exception as e:
-        return error_response(message=f'Erro ao calcular estatísticas: {str(e)}')
-
 # -------------------------- Exportação --------------------------
 
-@router.get("/competidor/exportar", tags=['Competidor Exportação'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
-async def exportar_competidores(
-    formato: str = Query(default="json", regex="^(json|csv)$", description="Formato de exportação"),
-    filtros: Optional[Dict[str, Any]] = Query(default=None, description="Filtros para exportação"),
+@router.get("/competidor/exportar", tags=['Competidor Exportação'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def exportar_competidor(
+    formato: str = Query(default="json", pattern="^(json|csv)$", description="Formato de exportação"),
+    nome: Optional[str] = Query(default=None),
+    handicap: Optional[int] = Query(default=None),
+    cidade: Optional[str] = Query(default=None),
+    estado: Optional[str] = Query(default=None),
+    sexo: Optional[str] = Query(default=None),
+    categoria_id: Optional[int] = Query(default=None),
+    categoria_tipo: Optional[str] = Query(default=None),
+    ativo: Optional[bool] = Query(default=True),
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
 ):
@@ -455,12 +662,14 @@ async def exportar_competidores(
     try:
         # Aplicar filtros se fornecidos
         competidores = await RepositorioCompetidor(db).get_all(
-            nome=filtros.get('nome') if filtros else None,
-            handicap=filtros.get('handicap') if filtros else None,
-            cidade=filtros.get('cidade') if filtros else None,
-            estado=filtros.get('estado') if filtros else None,
-            sexo=filtros.get('sexo') if filtros else None,
-            ativo=filtros.get('ativo', True) if filtros else True
+            nome=nome,
+            handicap=handicap,
+            cidade=cidade,
+            estado=estado,
+            sexo=sexo,
+            categoria_id=categoria_id,
+            categoria_tipo=categoria_tipo,
+            ativo=ativo
         )
         
         if not competidores:
@@ -473,9 +682,11 @@ async def exportar_competidores(
                 dados_csv.append({
                     'id': comp.id,
                     'nome': comp.nome,
+                    'login': comp.login,
                     'data_nascimento': comp.data_nascimento.strftime('%d/%m/%Y'),
                     'idade': comp.idade,
                     'handicap': comp.handicap,
+                    'categoria_id': comp.categoria_id or '',
                     'cidade': comp.cidade or '',
                     'estado': comp.estado or '',
                     'sexo': comp.sexo,
@@ -501,17 +712,19 @@ async def exportar_competidores(
 
 # -------------------------- Importação --------------------------
 
-@router.post("/competidor/importar", tags=['Competidor Importação'], status_code=status.HTTP_201_CREATED, response_model=models_lctp.ApiResponse)
+@router.post("/competidor/importar", tags=['Competidor Importação'], status_code=status.HTTP_201_CREATED, response_model=models.ApiResponse)
 async def importar_competidores(
     dados: Dict[str, Any] = Body(..., example={
         "competidores": [
             {
                 "nome": "João Silva",
+                "login": "joao.silva",
                 "data_nascimento": "1990-05-15",
                 "handicap": 3,
                 "cidade": "São Paulo",
                 "estado": "SP",
-                "sexo": "M"
+                "sexo": "M",
+                "categoria_id": 1
             }
         ],
         "validar_apenas": False
@@ -542,7 +755,7 @@ async def importar_competidores(
                     ).date()
                 
                 # Validar usando o modelo Pydantic
-                competidor = models_lctp.CompetidorPOST(**comp_data)
+                competidor = models.CompetidorPOST(**comp_data)
                 competidores_validados.append(competidor)
                 
             except Exception as e:
@@ -582,7 +795,7 @@ async def importar_competidores(
 
 # -------------------------- Rotas de Apoio --------------------------
 
-@router.get("/competidor/opcoes/estados", tags=['Competidor Apoio'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/competidor/opcoes/estados", tags=['Competidor Apoio'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def listar_estados_disponiveis(
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
@@ -591,9 +804,9 @@ async def listar_estados_disponiveis(
     
     try:
         from sqlalchemy import distinct
-        estados = db.query(distinct(schemas_lctp.Competidores.estado)).filter(
-            schemas_lctp.Competidores.estado.isnot(None),
-            schemas_lctp.Competidores.ativo == True
+        estados = db.query(distinct(schemas.Competidores.estado)).filter(
+            schemas.Competidores.estado.isnot(None),
+            schemas.Competidores.ativo == True
         ).all()
         
         estados_lista = [estado[0] for estado in estados if estado[0]]
@@ -601,7 +814,7 @@ async def listar_estados_disponiveis(
     except Exception as e:
         return error_response(message=f'Erro ao buscar estados: {str(e)}')
 
-@router.get("/competidor/opcoes/cidades", tags=['Competidor Apoio'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/competidor/opcoes/cidades", tags=['Competidor Apoio'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def listar_cidades_disponiveis(
     estado: Optional[str] = Query(default=None, max_length=2, description="Filtrar por estado"),
     db: Session = Depends(get_db),
@@ -611,16 +824,604 @@ async def listar_cidades_disponiveis(
     
     try:
         from sqlalchemy import distinct
-        query = db.query(distinct(schemas_lctp.Competidores.cidade)).filter(
-            schemas_lctp.Competidores.cidade.isnot(None),
-            schemas_lctp.Competidores.ativo == True
+        query = db.query(distinct(schemas.Competidores.cidade)).filter(
+            schemas.Competidores.cidade.isnot(None),
+            schemas.Competidores.ativo == True
         )
         
         if estado:
-            query = query.filter(schemas_lctp.Competidores.estado == estado)
+            query = query.filter(schemas.Competidores.estado == estado)
         
         cidades = query.all()
         cidades_lista = [cidade[0] for cidade in cidades if cidade[0]]
         return success_response(sorted(cidades_lista))
     except Exception as e:
         return error_response(message=f'Erro ao buscar cidades: {str(e)}')
+
+@router.get("/competidor/opcoes/categorias", tags=['Competidor Apoio'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def listar_categorias_disponiveis(
+    ativas_apenas: bool = Query(default=True, description="Apenas categorias ativas"),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Lista categorias disponíveis para competidores"""
+    
+    try:
+        from sqlalchemy import select
+        
+        query = select(schemas.Categorias)
+        if ativas_apenas:
+            query = query.where(schemas.Categorias.ativa == True)
+        
+        categorias = db.execute(query).scalars().all()
+        
+        categorias_lista = [
+            {
+                'id': cat.id,
+                'nome': cat.nome,
+                'tipo': cat.tipo,
+                'descricao': cat.descricao,
+                'ativa': cat.ativa
+            }
+            for cat in categorias
+        ]
+        
+        return success_response(categorias_lista)
+    except Exception as e:
+        return error_response(message=f'Erro ao buscar categorias: {str(e)}')
+    
+
+@router.get("/competidor/controle-participacao/{competidor_id:int}", tags=['Competidor Controle'], 
+           status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def listar_controle_participacao(
+    competidor_id: int = Path(..., description="ID do competidor"),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Lista controles de participação de um competidor"""
+    
+    # Verificar se o competidor existe
+    competidor = await RepositorioCompetidor(db).get_by_id(competidor_id)
+    if not competidor:
+        return error_response(message='Competidor não encontrado!')
+    
+    try:
+        controles = db.execute(
+            select(schemas.ControleParticipacao)
+            .join(schemas.Provas)
+            .join(schemas.Categorias)
+            .where(schemas.ControleParticipacao.competidor_id == competidor_id)
+            .order_by(schemas.ControleParticipacao.created_at.desc())
+        ).scalars().all()
+        
+        controles_dados = []
+        for controle in controles:
+            prova = db.execute(select(schemas.Provas).where(schemas.Provas.id == controle.prova_id)).scalars().first()
+            categoria = db.execute(select(schemas.Categorias).where(schemas.Categorias.id == controle.categoria_id)).scalars().first()
+            
+            controles_dados.append({
+                'id': controle.id,
+                'competidor_id': controle.competidor_id,
+                'prova_id': controle.prova_id,
+                'prova_nome': prova.nome if prova else 'Prova não encontrada',
+                'prova_data': prova.data if prova else None,
+                'categoria_id': controle.categoria_id,
+                'categoria_nome': categoria.nome if categoria else 'Categoria não encontrada',
+                'total_passadas_executadas': controle.total_passadas_executadas,
+                'max_passadas_permitidas': controle.max_passadas_permitidas,
+                'passadas_restantes': controle.passadas_restantes,
+                'percentual_uso': controle.percentual_uso,
+                'pode_competir': controle.pode_competir,
+                'motivo_bloqueio': controle.motivo_bloqueio,
+                'primeira_passada': controle.primeira_passada,
+                'ultima_passada': controle.ultima_passada,
+                'created_at': controle.created_at,
+                'updated_at': controle.updated_at
+            })
+        
+        return success_response(controles_dados)
+    except Exception as e:
+        return error_response(message=f'Erro ao buscar controles: {str(e)}')
+
+@router.post("/competidor/controle-participacao", tags=['Competidor Controle'], 
+            status_code=status.HTTP_201_CREATED, response_model=models.ApiResponse)
+async def criar_controle_participacao(
+    dados: Dict[str, Any] = Body(..., example={
+        "competidor_id": 1,
+        "prova_id": 1,
+        "categoria_id": 1,
+        "max_passadas_permitidas": 6,
+        "pode_competir": True,
+        "motivo_bloqueio": None
+    }),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Cria controle de participação para um competidor"""
+    
+    competidor_id = dados.get('competidor_id')
+    prova_id = dados.get('prova_id')
+    categoria_id = dados.get('categoria_id')
+    max_passadas = dados.get('max_passadas_permitidas', 6)
+    pode_competir = dados.get('pode_competir', True)
+    motivo_bloqueio = dados.get('motivo_bloqueio')
+    
+    if not all([competidor_id, prova_id, categoria_id]):
+        return error_response(message='competidor_id, prova_id e categoria_id são obrigatórios')
+    
+    # Verificar se já existe
+    controle_existente = db.execute(
+        select(schemas.ControleParticipacao).where(
+            schemas.ControleParticipacao.competidor_id == competidor_id,
+            schemas.ControleParticipacao.prova_id == prova_id,
+            schemas.ControleParticipacao.categoria_id == categoria_id
+        )
+    ).scalars().first()
+    
+    if controle_existente:
+        return error_response(message='Controle já existe para este competidor/prova/categoria')
+    
+    try:
+        # Validar se não pode competir deve ter motivo
+        if not pode_competir and not motivo_bloqueio:
+            motivo_bloqueio = "Bloqueado por administrador"
+        
+        controle = schemas.ControleParticipacao(
+            competidor_id=competidor_id,
+            prova_id=prova_id,
+            categoria_id=categoria_id,
+            max_passadas_permitidas=max_passadas,
+            pode_competir=pode_competir,
+            motivo_bloqueio=motivo_bloqueio
+        )
+        
+        db.add(controle)
+        db.commit()
+        db.refresh(controle)
+        
+        return success_response({
+            'id': controle.id,
+            'competidor_id': controle.competidor_id,
+            'prova_id': controle.prova_id,
+            'categoria_id': controle.categoria_id,
+            'max_passadas_permitidas': controle.max_passadas_permitidas,
+            'pode_competir': controle.pode_competir,
+            'motivo_bloqueio': controle.motivo_bloqueio
+        }, 'Controle de participação criado com sucesso', status_code=201)
+        
+    except Exception as e:
+        db.rollback()
+        return error_response(message=f'Erro ao criar controle: {str(e)}')
+
+@router.put("/competidor/controle-participacao/{controle_id:int}", tags=['Competidor Controle'], 
+           status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def atualizar_controle_participacao(
+    controle_id: int = Path(..., description="ID do controle"),
+    dados: Dict[str, Any] = Body(..., example={
+        "max_passadas_permitidas": 6,
+        "pode_competir": False,
+        "motivo_bloqueio": "Suspenso por comportamento inadequado"
+    }),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Atualiza controle de participação"""
+    
+    controle = db.execute(
+        select(schemas.ControleParticipacao).where(schemas.ControleParticipacao.id == controle_id)
+    ).scalars().first()
+    
+    if not controle:
+        return error_response(message='Controle não encontrado!')
+    
+    try:
+        # Atualizar campos permitidos
+        if 'max_passadas_permitidas' in dados:
+            controle.max_passadas_permitidas = dados['max_passadas_permitidas']
+        
+        if 'pode_competir' in dados:
+            controle.pode_competir = dados['pode_competir']
+        
+        if 'motivo_bloqueio' in dados:
+            controle.motivo_bloqueio = dados['motivo_bloqueio']
+        
+        # Validar se não pode competir deve ter motivo
+        if not controle.pode_competir and not controle.motivo_bloqueio:
+            controle.motivo_bloqueio = "Bloqueado por administrador"
+        
+        # Atualizar contadores
+        controle.atualizar_contadores()
+        
+        db.commit()
+        
+        return success_response({
+            'id': controle.id,
+            'max_passadas_permitidas': controle.max_passadas_permitidas,
+            'pode_competir': controle.pode_competir,
+            'motivo_bloqueio': controle.motivo_bloqueio,
+            'passadas_restantes': controle.passadas_restantes
+        }, 'Controle atualizado com sucesso')
+        
+    except Exception as e:
+        db.rollback()
+        return error_response(message=f'Erro ao atualizar controle: {str(e)}')
+
+@router.delete("/competidor/controle-participacao/{controle_id:int}", tags=['Competidor Controle'], 
+              status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def excluir_controle_participacao(
+    controle_id: int = Path(..., description="ID do controle"),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Exclui controle de participação"""
+    
+    controle = db.execute(
+        select(schemas.ControleParticipacao).where(schemas.ControleParticipacao.id == controle_id)
+    ).scalars().first()
+    
+    if not controle:
+        return error_response(message='Controle não encontrado!')
+    
+    try:
+        # Verificar se tem passadas executadas
+        if controle.total_passadas_executadas > 0:
+            return error_response(message='Não é possível excluir controle com passadas já executadas!')
+        
+        db.delete(controle)
+        db.commit()
+        
+        return success_response(None, 'Controle excluído com sucesso')
+        
+    except Exception as e:
+        db.rollback()
+        return error_response(message=f'Erro ao excluir controle: {str(e)}')
+
+@router.get("/competidor/provas-disponiveis/{competidor_id:int}/{categoria_id:int}", tags=['Competidor Controle'], 
+           status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def listar_provas_disponiveis_competidor(
+    competidor_id: int = Path(..., description="ID do competidor"),
+    categoria_id: int = Path(..., description="ID da categoria"),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Lista provas onde o competidor ainda pode ser inscrito na categoria específica"""
+    
+    # Verificar se o competidor existe
+    competidor = await RepositorioCompetidor(db).get_by_id(competidor_id)
+    if not competidor:
+        return error_response(message='Competidor não encontrado!')
+    
+    # Verificar se a categoria existe
+    categoria = db.execute(
+        select(schemas.Categorias).where(schemas.Categorias.id == categoria_id)
+    ).scalars().first()
+    if not categoria:
+        return error_response(message='Categoria não encontrada!')
+    
+    try:
+        # Buscar provas ativas (futuras)
+        provas_ativas = db.execute(
+            select(schemas.Provas).where(
+                schemas.Provas.ativa == True,
+                schemas.Provas.data >= date.today()  # Apenas provas futuras
+            ).order_by(schemas.Provas.data)
+        ).scalars().all()
+        
+        provas_disponiveis = []
+        for prova in provas_ativas:
+            # Verificar se já tem controle para esta prova/categoria específica
+            controle_existente = db.execute(
+                select(schemas.ControleParticipacao).where(
+                    schemas.ControleParticipacao.competidor_id == competidor_id,
+                    schemas.ControleParticipacao.prova_id == prova.id,
+                    schemas.ControleParticipacao.categoria_id == categoria_id
+                )
+            ).scalars().first()
+            
+            if not controle_existente:
+                provas_disponiveis.append({
+                    'id': prova.id,
+                    'nome': prova.nome,
+                    'data': prova.data,
+                    'cidade': prova.cidade,
+                    'estado': prova.estado,
+                    'rancho': prova.rancho,
+                    'tipo_copa': prova.tipo_copa
+                })
+        
+        return success_response(provas_disponiveis)
+        
+    except Exception as e:
+        return error_response(message=f'Erro ao buscar provas disponíveis: {str(e)}')
+    
+@router.post("/competidor/auto-criar-participacao/{competidor_id:int}", tags=['Competidor Controle'], 
+            status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def auto_criar_participacao_competidor(
+    competidor_id: int = Path(..., description="ID do competidor"),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Auto-cria controles de participação para competidor com categoria definida"""
+    
+    # Verificar se o competidor existe e tem categoria
+    competidor = await RepositorioCompetidor(db).get_by_id(competidor_id)
+    if not competidor:
+        return error_response(message='Competidor não encontrado!')
+    
+    if not competidor.categoria_id:
+        return error_response(message='Competidor deve ter categoria definida!')
+    
+    try:
+        # Buscar provas ativas futuras
+        provas_futuras = db.execute(
+            select(schemas.Provas).where(
+                schemas.Provas.ativa == True,
+                schemas.Provas.data >= date.today()
+            ).order_by(schemas.Provas.data)
+        ).scalars().all()
+        
+        controles_criados = []
+        
+        for prova in provas_futuras:
+            # Verificar se já existe controle
+            controle_existente = db.execute(
+                select(schemas.ControleParticipacao).where(
+                    schemas.ControleParticipacao.competidor_id == competidor_id,
+                    schemas.ControleParticipacao.prova_id == prova.id,
+                    schemas.ControleParticipacao.categoria_id == competidor.categoria_id
+                )
+            ).scalars().first()
+            
+            if not controle_existente:
+                # Buscar configuração de passadas para esta prova/categoria
+                config_passadas = db.execute(
+                    select(schemas.ConfiguracaoPassadasProva).where(
+                        schemas.ConfiguracaoPassadasProva.prova_id == prova.id,
+                        schemas.ConfiguracaoPassadasProva.categoria_id == competidor.categoria_id,
+                        schemas.ConfiguracaoPassadasProva.ativa == True
+                    )
+                ).scalars().first()
+                
+                # Definir máximo de passadas baseado na configuração
+                max_passadas = 6  # Padrão
+                if config_passadas:
+                    max_passadas = config_passadas.max_corridas_por_pessoa
+                
+                # Criar controle
+                controle = schemas.ControleParticipacao(
+                    competidor_id=competidor_id,
+                    prova_id=prova.id,
+                    categoria_id=competidor.categoria_id,
+                    max_passadas_permitidas=max_passadas,
+                    pode_competir=True,
+                    motivo_bloqueio=None
+                )
+                
+                db.add(controle)
+                controles_criados.append({
+                    'prova_id': prova.id,
+                    'prova_nome': prova.nome,
+                    'max_passadas_permitidas': max_passadas,
+                    'fonte_configuracao': bool(config_passadas)
+                })
+        
+        db.commit()
+        
+        return success_response({
+            'competidor_id': competidor_id,
+            'categoria_id': competidor.categoria_id,
+            'total_controles_criados': len(controles_criados),
+            'controles_criados': controles_criados
+        }, f'{len(controles_criados)} controles de participação criados automaticamente')
+        
+    except Exception as e:
+        db.rollback()
+        return error_response(message=f'Erro ao criar controles automáticos: {str(e)}')
+
+@router.get("/competidor/configuracao-passadas/{prova_id:int}/{categoria_id:int}", tags=['Competidor Controle'], 
+           status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def obter_configuracao_passadas_prova(
+    prova_id: int = Path(..., description="ID da prova"),
+    categoria_id: int = Path(..., description="ID da categoria"),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Obtém configuração de passadas para uma prova/categoria específica"""
+    
+    try:
+        config_passadas = db.execute(
+            select(schemas.ConfiguracaoPassadasProva).where(
+                schemas.ConfiguracaoPassadasProva.prova_id == prova_id,
+                schemas.ConfiguracaoPassadasProva.categoria_id == categoria_id,
+                schemas.ConfiguracaoPassadasProva.ativa == True
+            )
+        ).scalars().first()
+        
+        if config_passadas:
+            return success_response({
+                'id': config_passadas.id,
+                'prova_id': config_passadas.prova_id,
+                'categoria_id': config_passadas.categoria_id,
+                'max_passadas_por_trio': config_passadas.max_passadas_por_trio,
+                'max_corridas_por_pessoa': config_passadas.max_corridas_por_pessoa,
+                'tempo_limite_padrao': config_passadas.tempo_limite_padrao,
+                'intervalo_minimo_passadas': config_passadas.intervalo_minimo_passadas,
+                'permite_repetir_boi': config_passadas.permite_repetir_boi,
+                'ativa': config_passadas.ativa
+            })
+        else:
+            # Retornar configuração padrão
+            return success_response({
+                'configuracao_encontrada': False,
+                'max_corridas_por_pessoa': 6,  # Padrão
+                'max_passadas_por_trio': 1,
+                'observacao': 'Configuração padrão - nenhuma configuração específica encontrada'
+            })
+            
+    except Exception as e:
+        return error_response(message=f'Erro ao buscar configuração: {str(e)}')
+    
+@router.post("/competidor/atualizar-participacao-massa", tags=['Competidor Controle'], 
+            status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def atualizar_participacao_massa(
+    dados: Dict[str, Any] = Body(..., example={
+        "competidores_ids": [1, 2, 3, 4, 5],
+        "prova_id": 1,
+        "categoria_id": 1,
+        "max_passadas_permitidas": 6,
+        "pode_competir": True,
+        "motivo_bloqueio": None,
+        "sobrescrever_existentes": False
+    }),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Atualiza controle de participação em massa para múltiplos competidores"""
+    
+    competidores_ids = dados.get('competidores_ids', [])
+    prova_id = dados.get('prova_id')
+    categoria_id = dados.get('categoria_id')
+    max_passadas = dados.get('max_passadas_permitidas', 6)
+    pode_competir = dados.get('pode_competir', True)
+    motivo_bloqueio = dados.get('motivo_bloqueio')
+    sobrescrever = dados.get('sobrescrever_existentes', False)
+    
+    if not competidores_ids or not prova_id or not categoria_id:
+        return error_response(message='competidores_ids, prova_id e categoria_id são obrigatórios')
+    
+    try:
+        resultados = {
+            'total_processados': 0,
+            'controles_criados': 0,
+            'controles_atualizados': 0,
+            'erros': [],
+            'detalhes': []
+        }
+        
+        for competidor_id in competidores_ids:
+            try:
+                # Verificar se competidor existe
+                competidor = await RepositorioCompetidor(db).get_by_id(competidor_id)
+                if not competidor:
+                    resultados['erros'].append(f'Competidor ID {competidor_id} não encontrado')
+                    continue
+                
+                # Verificar se já existe controle
+                controle_existente = db.execute(
+                    select(schemas.ControleParticipacao).where(
+                        schemas.ControleParticipacao.competidor_id == competidor_id,
+                        schemas.ControleParticipacao.prova_id == prova_id,
+                        schemas.ControleParticipacao.categoria_id == categoria_id
+                    )
+                ).scalars().first()
+                
+                if controle_existente:
+                    if sobrescrever:
+                        # Atualizar controle existente
+                        controle_existente.max_passadas_permitidas = max_passadas
+                        controle_existente.pode_competir = pode_competir
+                        controle_existente.motivo_bloqueio = motivo_bloqueio if not pode_competir else None
+                        controle_existente.atualizar_contadores()
+                        
+                        resultados['controles_atualizados'] += 1
+                        resultados['detalhes'].append({
+                            'competidor_id': competidor_id,
+                            'competidor_nome': competidor.nome,
+                            'acao': 'atualizado'
+                        })
+                    else:
+                        resultados['erros'].append(f'Competidor {competidor.nome} já tem controle para esta prova/categoria')
+                        continue
+                else:
+                    # Criar novo controle
+                    if not pode_competir and not motivo_bloqueio:
+                        motivo_bloqueio = "Bloqueado por administrador"
+                    
+                    controle = schemas.ControleParticipacao(
+                        competidor_id=competidor_id,
+                        prova_id=prova_id,
+                        categoria_id=categoria_id,
+                        max_passadas_permitidas=max_passadas,
+                        pode_competir=pode_competir,
+                        motivo_bloqueio=motivo_bloqueio
+                    )
+                    
+                    db.add(controle)
+                    resultados['controles_criados'] += 1
+                    resultados['detalhes'].append({
+                        'competidor_id': competidor_id,
+                        'competidor_nome': competidor.nome,
+                        'acao': 'criado'
+                    })
+                
+                resultados['total_processados'] += 1
+                
+            except Exception as e:
+                resultados['erros'].append(f'Erro no competidor ID {competidor_id}: {str(e)}')
+        
+        db.commit()
+        
+        # Mensagem de sucesso personalizada
+        total_sucesso = resultados['controles_criados'] + resultados['controles_atualizados']
+        mensagem = f'Processamento concluído: {total_sucesso} controles de participação processados com sucesso'
+        
+        if resultados['erros']:
+            mensagem += f' - {len(resultados["erros"])} erros encontrados'
+        
+        return success_response(resultados, mensagem)
+        
+    except Exception as e:
+        db.rollback()
+        return error_response(message=f'Erro na atualização em massa: {str(e)}')
+    
+async def auto_criar_controles_participacao(competidor_id: int, categoria_id: int, db: Session):
+    """Função auxiliar para auto-criar controles de participação"""
+    
+    # Buscar provas ativas futuras
+    provas_futuras = db.execute(
+        select(schemas.Provas).where(
+            schemas.Provas.ativa == True,
+            schemas.Provas.data >= date.today()
+        )
+    ).scalars().all()
+    
+    controles_criados = 0
+    
+    for prova in provas_futuras:
+        # Verificar se já existe controle
+        controle_existente = db.execute(
+            select(schemas.ControleParticipacao).where(
+                schemas.ControleParticipacao.competidor_id == competidor_id,
+                schemas.ControleParticipacao.prova_id == prova.id,
+                schemas.ControleParticipacao.categoria_id == categoria_id
+            )
+        ).scalars().first()
+        
+        if not controle_existente:
+            # Buscar configuração
+            config_passadas = db.execute(
+                select(schemas.ConfiguracaoPassadasProva).where(
+                    schemas.ConfiguracaoPassadasProva.prova_id == prova.id,
+                    schemas.ConfiguracaoPassadasProva.categoria_id == categoria_id,
+                    schemas.ConfiguracaoPassadasProva.ativa == True
+                )
+            ).scalars().first()
+            
+            max_passadas = config_passadas.max_corridas_por_pessoa if config_passadas else 3
+            
+            # Criar controle
+            controle = schemas.ControleParticipacao(
+                competidor_id=competidor_id,
+                prova_id=prova.id,
+                categoria_id=categoria_id,
+                max_passadas_permitidas=max_passadas,
+                pode_competir=True
+            )
+            
+            db.add(controle)
+            controles_criados += 1
+    
+    if controles_criados > 0:
+        db.commit()
+    
+    return controles_criados

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime, date
 from src.utils.auth_utils import obter_usuario_logado
 from src.database.db import get_db
-from src.database import models_lctp, schemas_lctp
+from src.database import models, schemas
 from src.utils.api_response import success_response, error_response
 from src.repositorios.resultado import RepositorioResultado
 from src.utils.route_error_handler import RouteErrorHandler
@@ -13,7 +13,7 @@ router = APIRouter(route_class=RouteErrorHandler)
 
 # -------------------------- Operações Básicas CRUD --------------------------
 
-@router.get("/resultado/consultar/{resultado_id}", tags=['Resultado'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/resultado/consultar/{resultado_id}", tags=['Resultado'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def consultar_resultado(
     resultado_id: int = Path(..., description="ID do resultado"),
     db: Session = Depends(get_db),
@@ -27,7 +27,7 @@ async def consultar_resultado(
     
     return success_response(resultado)
 
-@router.get("/resultado/trio/{trio_id}", tags=['Resultado'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/resultado/trio/{trio_id}", tags=['Resultado'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def consultar_resultado_trio(
     trio_id: int = Path(..., description="ID do trio"),
     db: Session = Depends(get_db),
@@ -41,9 +41,9 @@ async def consultar_resultado_trio(
     
     return success_response(resultado)
 
-@router.post("/resultado/criar", tags=['Resultado'], status_code=status.HTTP_201_CREATED, response_model=models_lctp.ApiResponse)
+@router.post("/resultado/criar", tags=['Resultado'], status_code=status.HTTP_201_CREATED, response_model=models.ApiResponse)
 async def criar_resultado(
-    resultado_data: models_lctp.ResultadoPOST,
+    resultado_data: models.ResultadoPOST,
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
 ):
@@ -55,10 +55,10 @@ async def criar_resultado(
     except ValueError as e:
         return error_response(message=str(e))
 
-@router.put("/resultado/atualizar/{resultado_id}", tags=['Resultado'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.put("/resultado/atualizar/{resultado_id}", tags=['Resultado'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def atualizar_resultado(
     resultado_id: int = Path(..., description="ID do resultado"),
-    resultado_data: models_lctp.ResultadoPUT = Body(...),
+    resultado_data: models.ResultadoPUT = Body(...),
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
 ):
@@ -73,7 +73,7 @@ async def atualizar_resultado(
     except ValueError as e:
         return error_response(message=str(e))
 
-@router.delete("/resultado/deletar/{resultado_id}", tags=['Resultado'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.delete("/resultado/deletar/{resultado_id}", tags=['Resultado'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def excluir_resultado(
     resultado_id: int = Path(..., description="ID do resultado"),
     db: Session = Depends(get_db),
@@ -92,7 +92,7 @@ async def excluir_resultado(
 
 # -------------------------- Consultas por Prova/Categoria --------------------------
 
-@router.get("/resultado/prova/{prova_id}", tags=['Resultado Consulta'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/resultado/prova/{prova_id}", tags=['Resultado Consulta'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def listar_resultados_prova(
     prova_id: int = Path(..., description="ID da prova"),
     categoria_id: Optional[int] = Query(default=None, description="ID da categoria (opcional)"),
@@ -107,7 +107,7 @@ async def listar_resultados_prova(
     
     return success_response(resultados, f'{len(resultados)} resultados encontrados')
 
-@router.get("/resultado/ranking/prova/{prova_id}/categoria/{categoria_id}", tags=['Resultado Ranking'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/resultado/ranking/prova/{prova_id}/categoria/{categoria_id}", tags=['Resultado Ranking'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def ranking_prova_categoria(
     prova_id: int = Path(..., description="ID da prova"),
     categoria_id: int = Path(..., description="ID da categoria"),
@@ -127,7 +127,7 @@ async def ranking_prova_categoria(
 
 # -------------------------- Lançamento em Lote --------------------------
 
-@router.post("/resultado/lancar-lote", tags=['Resultado Lote'], status_code=status.HTTP_201_CREATED, response_model=models_lctp.ApiResponse)
+@router.post("/resultado/lancar-lote", tags=['Resultado Lote'], status_code=status.HTTP_201_CREATED, response_model=models.ApiResponse)
 async def lancar_resultados_lote(
     prova_id: int = Query(..., description="ID da prova"),
     resultados_data: List[Dict[str, Any]] = Body(..., example=[
@@ -164,7 +164,7 @@ async def lancar_resultados_lote(
     except Exception as e:
         return error_response(message=f'Erro no lançamento em lote: {str(e)}')
 
-@router.post("/resultado/calcular-colocacoes", tags=['Resultado Lote'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.post("/resultado/calcular-colocacoes", tags=['Resultado Lote'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def calcular_colocacoes_automaticas(
     prova_id: int = Query(..., description="ID da prova"),
     categoria_id: Optional[int] = Query(default=None, description="ID da categoria (opcional)"),
@@ -185,7 +185,7 @@ async def calcular_colocacoes_automaticas(
 
 # -------------------------- Pontuação CONTEP --------------------------
 
-@router.post("/resultado/calcular-pontuacao", tags=['Resultado Pontuação'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.post("/resultado/calcular-pontuacao", tags=['Resultado Pontuação'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def calcular_pontuacao_contep(
     prova_id: int = Query(..., description="ID da prova"),
     categoria_id: Optional[int] = Query(default=None, description="ID da categoria (opcional)"),
@@ -206,7 +206,7 @@ async def calcular_pontuacao_contep(
 
 # -------------------------- Estatísticas e Relatórios --------------------------
 
-@router.get("/resultado/estatisticas/categoria/{categoria_id}", tags=['Resultado Estatísticas'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/resultado/estatisticas/categoria/{categoria_id}", tags=['Resultado Estatísticas'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def estatisticas_categoria(
     categoria_id: int = Path(..., description="ID da categoria"),
     ano: Optional[int] = Query(default=None, description="Ano específico (opcional)"),
@@ -225,7 +225,7 @@ async def estatisticas_categoria(
     except Exception as e:
         return error_response(message=f'Erro ao gerar estatísticas: {str(e)}')
 
-@router.get("/resultado/melhores-tempos/categoria/{categoria_id}", tags=['Resultado Estatísticas'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/resultado/melhores-tempos/categoria/{categoria_id}", tags=['Resultado Estatísticas'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def melhores_tempos_categoria(
     categoria_id: int = Path(..., description="ID da categoria"),
     limite: int = Query(default=10, ge=1, le=50, description="Número de resultados"),
@@ -245,7 +245,7 @@ async def melhores_tempos_categoria(
     except Exception as e:
         return error_response(message=f'Erro ao buscar melhores tempos: {str(e)}')
 
-@router.get("/resultado/relatorio/performance/{prova_id}", tags=['Resultado Relatórios'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/resultado/relatorio/performance/{prova_id}", tags=['Resultado Relatórios'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def relatorio_performance_prova(
     prova_id: int = Path(..., description="ID da prova"),
     db: Session = Depends(get_db),
@@ -259,7 +259,7 @@ async def relatorio_performance_prova(
     except Exception as e:
         return error_response(message=f'Erro ao gerar relatório: {str(e)}')
 
-@router.get("/resultado/comparar/categorias/{prova_id}", tags=['Resultado Relatórios'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/resultado/comparar/categorias/{prova_id}", tags=['Resultado Relatórios'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def comparar_performance_categorias(
     prova_id: int = Path(..., description="ID da prova"),
     db: Session = Depends(get_db),
@@ -275,7 +275,7 @@ async def comparar_performance_categorias(
 
 # -------------------------- Exportação e Importação --------------------------
 
-@router.get("/resultado/exportar", tags=['Resultado Exportação'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/resultado/exportar", tags=['Resultado Exportação'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def exportar_resultados(
     prova_id: int = Query(..., description="ID da prova"),
     formato: str = Query(default="json", regex="^(json|csv)$", description="Formato de exportação"),
@@ -290,7 +290,7 @@ async def exportar_resultados(
     except Exception as e:
         return error_response(message=f'Erro na exportação: {str(e)}')
 
-@router.post("/resultado/importar-csv", tags=['Resultado Importação'], status_code=status.HTTP_201_CREATED, response_model=models_lctp.ApiResponse)
+@router.post("/resultado/importar-csv", tags=['Resultado Importação'], status_code=status.HTTP_201_CREATED, response_model=models.ApiResponse)
 async def importar_resultados_csv(
     prova_id: int = Query(..., description="ID da prova"),
     dados_csv: List[Dict[str, Any]] = Body(..., example=[
@@ -329,7 +329,7 @@ async def importar_resultados_csv(
 
 # -------------------------- Utilitários e Validações --------------------------
 
-@router.post("/resultado/recalcular/{prova_id}", tags=['Resultado Utilitários'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.post("/resultado/recalcular/{prova_id}", tags=['Resultado Utilitários'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def recalcular_campos_derivados(
     prova_id: int = Path(..., description="ID da prova"),
     db: Session = Depends(get_db),
@@ -347,7 +347,7 @@ async def recalcular_campos_derivados(
     except Exception as e:
         return error_response(message=f'Erro no recálculo: {str(e)}')
 
-@router.get("/resultado/validar-consistencia/{prova_id}", tags=['Resultado Validação'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/resultado/validar-consistencia/{prova_id}", tags=['Resultado Validação'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def validar_consistencia_resultados(
     prova_id: int = Path(..., description="ID da prova"),
     db: Session = Depends(get_db),
@@ -368,7 +368,7 @@ async def validar_consistencia_resultados(
     except Exception as e:
         return error_response(message=f'Erro na validação: {str(e)}')
 
-@router.post("/resultado/corrigir-tempos", tags=['Resultado Utilitários'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.post("/resultado/corrigir-tempos", tags=['Resultado Utilitários'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def corrigir_tempos_resultado(
     resultado_id: int = Query(..., description="ID do resultado"),
     passada1_tempo: Optional[float] = Query(default=None, description="Novo tempo da passada 1"),
@@ -379,7 +379,7 @@ async def corrigir_tempos_resultado(
     """Corrige tempos de um resultado específico e recalcula a média"""
     
     try:
-        resultado_data = models_lctp.ResultadoPUT(
+        resultado_data = models.ResultadoPUT(
             passada1_tempo=passada1_tempo,
             passada2_tempo=passada2_tempo
         )
@@ -393,7 +393,7 @@ async def corrigir_tempos_resultado(
     except Exception as e:
         return error_response(message=f'Erro na correção: {str(e)}')
 
-@router.get("/resultado/analise/distribuicao-tempos/{prova_id}", tags=['Resultado Análise'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/resultado/analise/distribuicao-tempos/{prova_id}", tags=['Resultado Análise'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def analise_distribuicao_tempos(
     prova_id: int = Path(..., description="ID da prova"),
     categoria_id: Optional[int] = Query(default=None, description="ID da categoria (opcional)"),
@@ -442,7 +442,7 @@ async def analise_distribuicao_tempos(
 
 # -------------------------- Endpoints Especiais --------------------------
 
-@router.post("/resultado/processar-prova-completa", tags=['Resultado Especial'], status_code=status.HTTP_201_CREATED, response_model=models_lctp.ApiResponse)
+@router.post("/resultado/processar-prova-completa", tags=['Resultado Especial'], status_code=status.HTTP_201_CREATED, response_model=models.ApiResponse)
 async def processar_prova_completa(
     prova_id: int = Query(..., description="ID da prova"),
     resultados_data: List[Dict[str, Any]] = Body(...),

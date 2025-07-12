@@ -1,6 +1,6 @@
 from sqlalchemy import select, delete, update, func, desc, asc, and_, or_
 from sqlalchemy.orm import Session, joinedload
-from src.database import models_lctp, schemas_lctp
+from src.database import models, schemas
 from src.utils.error_handler import handle_error
 from src.utils.utils_lctp import UtilsLCTP
 from src.utils.config_lctp import ConfigLCTP
@@ -19,57 +19,57 @@ class RepositorioCategoria:
 
     # ---------------------- Operações Básicas ----------------------
 
-    async def get_all(self, ativas_apenas: bool = True) -> List[schemas_lctp.Categorias]:
+    async def get_all(self, ativas_apenas: bool = True) -> List[schemas.Categorias]:
         """Recupera todas as categorias"""
         try:
-            stmt = select(schemas_lctp.Categorias)
+            stmt = select(schemas.Categorias)
             
             if ativas_apenas:
-                stmt = stmt.where(schemas_lctp.Categorias.ativa == True)
+                stmt = stmt.where(schemas.Categorias.ativa == True)
             
-            stmt = stmt.order_by(schemas_lctp.Categorias.nome)
+            stmt = stmt.order_by(schemas.Categorias.nome)
             
             return self.db.execute(stmt).scalars().all()
         except Exception as error:
             handle_error(error, self.get_all)
 
-    async def get_by_id(self, categoria_id: int) -> Optional[schemas_lctp.Categorias]:
+    async def get_by_id(self, categoria_id: int) -> Optional[schemas.Categorias]:
         """Recupera uma categoria pelo ID"""
         try:
-            stmt = select(schemas_lctp.Categorias).where(
-                schemas_lctp.Categorias.id == categoria_id
+            stmt = select(schemas.Categorias).where(
+                schemas.Categorias.id == categoria_id
             )
             
             return self.db.execute(stmt).scalars().first()
         except Exception as error:
             handle_error(error, self.get_by_id)
 
-    async def get_by_nome(self, nome: str) -> Optional[schemas_lctp.Categorias]:
+    async def get_by_nome(self, nome: str) -> Optional[schemas.Categorias]:
         """Recupera uma categoria pelo nome"""
         try:
-            stmt = select(schemas_lctp.Categorias).where(
-                schemas_lctp.Categorias.nome.ilike(f"%{nome}%")
+            stmt = select(schemas.Categorias).where(
+                schemas.Categorias.nome.ilike(f"%{nome}%")
             )
             
             return self.db.execute(stmt).scalars().first()
         except Exception as error:
             handle_error(error, self.get_by_nome)
 
-    async def get_by_tipo(self, tipo: schemas_lctp.TipoCategoria, ativas_apenas: bool = True) -> List[schemas_lctp.Categorias]:
+    async def get_by_tipo(self, tipo: schemas.TipoCategoria, ativas_apenas: bool = True) -> List[schemas.Categorias]:
         """Recupera categorias por tipo"""
         try:
-            stmt = select(schemas_lctp.Categorias).where(
-                schemas_lctp.Categorias.tipo == tipo
+            stmt = select(schemas.Categorias).where(
+                schemas.Categorias.tipo == tipo
             )
             
             if ativas_apenas:
-                stmt = stmt.where(schemas_lctp.Categorias.ativa == True)
+                stmt = stmt.where(schemas.Categorias.ativa == True)
             
             return self.db.execute(stmt).scalars().all()
         except Exception as error:
             handle_error(error, self.get_by_tipo)
 
-    async def post(self, categoria_data: models_lctp.CategoriaPOST) -> schemas_lctp.Categorias:
+    async def post(self, categoria_data: models.CategoriaPOST) -> schemas.Categorias:
         """Cria uma nova categoria"""
         try:
             # Verificar se já existe categoria com o mesmo nome
@@ -80,7 +80,7 @@ class RepositorioCategoria:
             # Validar regras específicas por tipo
             await self._validar_regras_categoria(categoria_data)
 
-            db_categoria = schemas_lctp.Categorias(
+            db_categoria = schemas.Categorias(
                 nome=categoria_data.nome,
                 tipo=categoria_data.tipo,
                 descricao=categoria_data.descricao,
@@ -105,7 +105,7 @@ class RepositorioCategoria:
             self.db.rollback()
             handle_error(error, self.post)
 
-    async def put(self, categoria_id: int, categoria_data: models_lctp.CategoriaPUT) -> Optional[schemas_lctp.Categorias]:
+    async def put(self, categoria_id: int, categoria_data: models.CategoriaPUT) -> Optional[schemas.Categorias]:
         """Atualiza uma categoria"""
         try:
             categoria_existente = await self.get_by_id(categoria_id)
@@ -124,7 +124,7 @@ class RepositorioCategoria:
             if update_data:
                 # Validar regras se necessário
                 if any(key in update_data for key in ['tipo', 'handicap_max_trio', 'idade_max_trio']):
-                    categoria_temp = models_lctp.CategoriaPOST(
+                    categoria_temp = models.CategoriaPOST(
                         nome=update_data.get('nome', categoria_existente.nome),
                         tipo=update_data.get('tipo', categoria_existente.tipo),
                         descricao=update_data.get('descricao', categoria_existente.descricao),
@@ -141,8 +141,8 @@ class RepositorioCategoria:
                     )
                     await self._validar_regras_categoria(categoria_temp)
 
-                stmt = update(schemas_lctp.Categorias).where(
-                    schemas_lctp.Categorias.id == categoria_id
+                stmt = update(schemas.Categorias).where(
+                    schemas.Categorias.id == categoria_id
                 ).values(**update_data)
                 
                 self.db.execute(stmt)
@@ -161,16 +161,16 @@ class RepositorioCategoria:
                 raise CategoriaException(f"Categoria com ID {categoria_id} não encontrada")
 
             # Verificar se a categoria tem trios associados
-            trios_count = await self.db.execute(
-                select(func.count(schemas_lctp.Trios.id)).where(
-                    schemas_lctp.Trios.categoria_id == categoria_id
+            trios_count = self.db.execute(
+                select(func.count(schemas.Trios.id)).where(
+                    schemas.Trios.categoria_id == categoria_id
                 )
             ).scalar()
 
             if trios_count > 0:
                 # Soft delete - apenas marcar como inativa
-                stmt = update(schemas_lctp.Categorias).where(
-                    schemas_lctp.Categorias.id == categoria_id
+                stmt = update(schemas.Categorias).where(
+                    schemas.Categorias.id == categoria_id
                 ).values(ativa=False)
                 
                 self.db.execute(stmt)
@@ -178,8 +178,8 @@ class RepositorioCategoria:
                 return True
             else:
                 # Delete físico se não tem trios
-                stmt = delete(schemas_lctp.Categorias).where(
-                    schemas_lctp.Categorias.id == categoria_id
+                stmt = delete(schemas.Categorias).where(
+                    schemas.Categorias.id == categoria_id
                 )
                 
                 self.db.execute(stmt)
@@ -192,13 +192,13 @@ class RepositorioCategoria:
 
     # ---------------------- Consultas Especializadas ----------------------
 
-    async def get_categorias_competidor(self, competidor_id: int) -> List[schemas_lctp.Categorias]:
+    async def get_categorias_competidor(self, competidor_id: int) -> List[schemas.Categorias]:
         """Retorna categorias nas quais um competidor pode participar"""
         try:
             # Buscar dados do competidor
-            competidor = await self.db.execute(
-                select(schemas_lctp.Competidores).where(
-                    schemas_lctp.Competidores.id == competidor_id
+            competidor = self.db.execute(
+                select(schemas.Competidores).where(
+                    schemas.Competidores.id == competidor_id
                 )
             ).scalars().first()
 
@@ -217,13 +217,13 @@ class RepositorioCategoria:
         except Exception as error:
             handle_error(error, self.get_categorias_competidor)
 
-    async def get_categorias_que_permitem_sorteio(self) -> List[schemas_lctp.Categorias]:
+    async def get_categorias_que_permitem_sorteio(self) -> List[schemas.Categorias]:
         """Retorna categorias que permitem sorteio"""
         try:
-            stmt = select(schemas_lctp.Categorias).where(
-                schemas_lctp.Categorias.permite_sorteio == True,
-                schemas_lctp.Categorias.ativa == True
-            ).order_by(schemas_lctp.Categorias.nome)
+            stmt = select(schemas.Categorias).where(
+                schemas.Categorias.permite_sorteio == True,
+                schemas.Categorias.ativa == True
+            ).order_by(schemas.Categorias.nome)
             
             return self.db.execute(stmt).scalars().all()
         except Exception as error:
@@ -237,13 +237,13 @@ class RepositorioCategoria:
                 return {}
 
             # Query base para trios da categoria
-            query = self.db.query(schemas_lctp.Trios).filter(
-                schemas_lctp.Trios.categoria_id == categoria_id
+            query = self.db.query(schemas.Trios).filter(
+                schemas.Trios.categoria_id == categoria_id
             )
 
             if ano:
-                query = query.join(schemas_lctp.Provas).filter(
-                    func.extract('year', schemas_lctp.Provas.data) == ano
+                query = query.join(schemas.Provas).filter(
+                    func.extract('year', schemas.Provas.data) == ano
                 )
 
             trios = query.all()
@@ -292,16 +292,16 @@ class RepositorioCategoria:
         try:
             # Buscar categorias que têm trios na prova
             stmt = select(
-                schemas_lctp.Categorias,
-                func.count(schemas_lctp.Trios.id).label('total_trios')
+                schemas.Categorias,
+                func.count(schemas.Trios.id).label('total_trios')
             ).join(
-                schemas_lctp.Trios
+                schemas.Trios
             ).where(
-                schemas_lctp.Trios.prova_id == prova_id
+                schemas.Trios.prova_id == prova_id
             ).group_by(
-                schemas_lctp.Categorias.id
+                schemas.Categorias.id
             ).order_by(
-                schemas_lctp.Categorias.nome
+                schemas.Categorias.nome
             )
 
             resultados = self.db.execute(stmt).all()
@@ -320,20 +320,20 @@ class RepositorioCategoria:
 
     # ---------------------- Validações ----------------------
 
-    async def _validar_regras_categoria(self, categoria_data: models_lctp.CategoriaPOST):
+    async def _validar_regras_categoria(self, categoria_data: models.CategoriaPOST):
         """Valida regras específicas por tipo de categoria"""
         try:
             regras = ConfigLCTP.REGRAS_CATEGORIAS.get(categoria_data.tipo.value, {})
             
             # Validações por tipo
             match categoria_data.tipo:
-                case schemas_lctp.TipoCategoria.BABY:
+                case schemas.TipoCategoria.BABY:
                     if not categoria_data.sorteio_completo:
                         raise CategoriaException("Categoria Baby deve ter sorteio completo")
                     if categoria_data.idade_max_individual is None:
                         categoria_data.idade_max_individual = regras.get('idade_max', 12)
                 
-                case schemas_lctp.TipoCategoria.KIDS:
+                case schemas.TipoCategoria.KIDS:
                     if categoria_data.idade_min_individual is None:
                         categoria_data.idade_min_individual = regras.get('idade_min', 13)
                     if categoria_data.idade_max_individual is None:
@@ -341,15 +341,15 @@ class RepositorioCategoria:
                     if categoria_data.permite_sorteio and not categoria_data.max_inscricoes_sorteio:
                         categoria_data.max_inscricoes_sorteio = regras.get('max_sorteio', 9)
                 
-                case schemas_lctp.TipoCategoria.MIRIM:
+                case schemas.TipoCategoria.MIRIM:
                     if categoria_data.idade_max_trio is None:
                         categoria_data.idade_max_trio = regras.get('idade_max_trio', 36)
                 
-                case schemas_lctp.TipoCategoria.FEMININA:
+                case schemas.TipoCategoria.FEMININA:
                     if categoria_data.permite_sorteio and not categoria_data.max_inscricoes_sorteio:
                         categoria_data.max_inscricoes_sorteio = regras.get('max_sorteio', 9)
                 
-                case schemas_lctp.TipoCategoria.HANDICAP:
+                case schemas.TipoCategoria.HANDICAP:
                     if categoria_data.handicap_max_trio is None:
                         categoria_data.handicap_max_trio = regras.get('handicap_max_trio', 11)
 
@@ -364,7 +364,7 @@ class RepositorioCategoria:
         except Exception as error:
             handle_error(error, self._validar_regras_categoria)
 
-    async def _competidor_pode_participar(self, competidor: schemas_lctp.Competidores, categoria: schemas_lctp.Categorias) -> bool:
+    async def _competidor_pode_participar(self, competidor: schemas.Competidores, categoria: schemas.Categorias) -> bool:
         """Verifica se um competidor pode participar de uma categoria"""
         try:
             idade = competidor.idade
@@ -378,11 +378,11 @@ class RepositorioCategoria:
                 return False
 
             # Verificar sexo para categoria feminina
-            if categoria.tipo == schemas_lctp.TipoCategoria.FEMININA and competidor.sexo != 'F':
+            if categoria.tipo == schemas.TipoCategoria.FEMININA and competidor.sexo != 'F':
                 return False
 
             # Categoria aberta aceita todos
-            if categoria.tipo == schemas_lctp.TipoCategoria.ABERTA:
+            if categoria.tipo == schemas.TipoCategoria.ABERTA:
                 return True
 
             return True
@@ -400,9 +400,9 @@ class RepositorioCategoria:
                 return False, "Categoria não encontrada"
 
             # Buscar competidores
-            competidores = await self.db.execute(
-                select(schemas_lctp.Competidores).where(
-                    schemas_lctp.Competidores.id.in_(competidores_ids)
+            competidores = self.db.execute(
+                select(schemas.Competidores).where(
+                    schemas.Competidores.id.in_(competidores_ids)
                 )
             ).scalars().all()
 
@@ -410,7 +410,7 @@ class RepositorioCategoria:
                 return False, "Nem todos os competidores foram encontrados"
 
             # Validar categoria feminina
-            if categoria.tipo == schemas_lctp.TipoCategoria.FEMININA:
+            if categoria.tipo == schemas.TipoCategoria.FEMININA:
                 if not all(c.sexo == 'F' for c in competidores):
                     return False, "Categoria feminina aceita apenas mulheres"
 

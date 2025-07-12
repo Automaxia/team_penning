@@ -1,10 +1,11 @@
 from fastapi import APIRouter, status, Depends, HTTPException, Path, Query, Body
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
-from datetime import datetime, date
+from sqlalchemy import select, func
+from datetime import datetime, date, timedelta
 from src.utils.auth_utils import obter_usuario_logado
 from src.database.db import get_db
-from src.database import models_lctp, schemas_lctp
+from src.database import models, schemas
 from src.utils.api_response import success_response, error_response
 from src.repositorios.prova import RepositorioProva
 from src.utils.route_error_handler import RouteErrorHandler
@@ -13,7 +14,7 @@ router = APIRouter(route_class=RouteErrorHandler)
 
 # -------------------------- Operações Básicas CRUD --------------------------
 
-@router.get("/prova/listar", tags=['Prova'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/listar", tags=['Prova'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def listar_provas(
     ativas_apenas: bool = Query(default=True, description="Listar apenas provas ativas"),
     ano: Optional[int] = Query(default=None, description="Filtrar por ano específico"),
@@ -29,7 +30,50 @@ async def listar_provas(
     
     return success_response(provas, f'{len(provas)} provas encontradas')
 
-@router.get("/prova/consultar/{prova_id}", tags=['Prova'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/{prova_id}/estatisticas", tags=['Prova'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def obter_estatisticas_prova(
+    prova_id: int,
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Obtém estatísticas detalhadas de uma prova específica"""
+    
+    try:
+        # Verificar se a prova existe
+        prova = await RepositorioProva(db).get_by_id(prova_id)
+        if not prova:
+            return error_response(message=f'Prova com ID {prova_id} não encontrada!')
+        
+        # Buscar estatísticas
+        estatisticas = await RepositorioProva(db).get_estatisticas(prova_id)
+        
+        return success_response(estatisticas, 'Estatísticas obtidas com sucesso')
+        
+    except Exception as error:
+        return error_response(message='Erro interno do servidor')
+
+
+@router.get("/prova/listar-com-stats", tags=['Prova'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def listar_provas_com_estatisticas(
+    ativas_apenas: bool = Query(default=True, description="Listar apenas provas ativas"),
+    ano: Optional[int] = Query(default=None, description="Filtrar por ano específico"),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Lista todas as provas com suas estatísticas incluídas"""
+    
+    try:
+        provas = await RepositorioProva(db).get_all_com_estatisticas(ativas_apenas, ano)
+        if not provas:
+            filtro_msg = f" do ano {ano}" if ano else ""
+            return error_response(message=f'Nenhuma prova encontrada{filtro_msg}!')
+        
+        return success_response(provas, f'{len(provas)} provas encontradas com estatísticas')
+        
+    except Exception as error:
+        return error_response(message='Erro interno do servidor')
+
+@router.get("/prova/consultar/{prova_id}", tags=['Prova'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def consultar_prova(
     prova_id: int = Path(..., description="ID da prova"),
     db: Session = Depends(get_db),
@@ -43,24 +87,23 @@ async def consultar_prova(
     
     return success_response(prova)
 
-@router.post("/prova/criar", tags=['Prova'], status_code=status.HTTP_201_CREATED, response_model=models_lctp.ApiResponse)
+@router.post("/prova/criar", tags=['Prova'], status_code=status.HTTP_201_CREATED, response_model=models.ApiResponse)
 async def criar_prova(
-    prova_data: models_lctp.ProvaPOST,
+    prova_data: models.ProvaPOST,
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
 ):
-    """Cria uma nova prova"""
-    
+    """Cria uma nova prova"""    
     try:
         prova = await RepositorioProva(db).post(prova_data)
         return success_response(prova, 'Prova criada com sucesso', status_code=201)
     except ValueError as e:
         return error_response(message=str(e))
 
-@router.put("/prova/atualizar/{prova_id}", tags=['Prova'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.put("/prova/atualizar/{prova_id}", tags=['Prova'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def atualizar_prova(
     prova_id: int = Path(..., description="ID da prova"),
-    prova_data: models_lctp.ProvaPUT = Body(...),
+    prova_data: models.ProvaPUT = Body(...),
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
 ):
@@ -75,7 +118,7 @@ async def atualizar_prova(
     except ValueError as e:
         return error_response(message=str(e))
 
-@router.delete("/prova/deletar/{prova_id}", tags=['Prova'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.delete("/prova/deletar/{prova_id}", tags=['Prova'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def excluir_prova(
     prova_id: int = Path(..., description="ID da prova"),
     db: Session = Depends(get_db),
@@ -94,7 +137,7 @@ async def excluir_prova(
 
 # -------------------------- Consultas Especializadas --------------------------
 
-@router.get("/prova/buscar/nome/{nome}", tags=['Prova Consulta'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/buscar/nome/{nome}", tags=['Prova Consulta'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def buscar_por_nome(
     nome: str = Path(..., description="Nome da prova (busca parcial)"),
     db: Session = Depends(get_db),
@@ -108,7 +151,7 @@ async def buscar_por_nome(
     
     return success_response(provas, f'{len(provas)} provas encontradas')
 
-@router.get("/prova/periodo", tags=['Prova Consulta'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/periodo", tags=['Prova Consulta'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def provas_por_periodo(
     data_inicio: date = Query(..., description="Data de início do período"),
     data_fim: date = Query(..., description="Data de fim do período"),
@@ -126,7 +169,7 @@ async def provas_por_periodo(
     
     return success_response(provas, f'{len(provas)} provas no período')
 
-@router.get("/prova/rancho/{rancho}", tags=['Prova Consulta'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/rancho/{rancho}", tags=['Prova Consulta'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def provas_por_rancho(
     rancho: str = Path(..., description="Nome do rancho"),
     ano: Optional[int] = Query(default=None, description="Ano específico (opcional)"),
@@ -142,7 +185,7 @@ async def provas_por_rancho(
     
     return success_response(provas, f'{len(provas)} provas encontradas')
 
-@router.get("/prova/estado/{estado}", tags=['Prova Consulta'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/estado/{estado}", tags=['Prova Consulta'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def provas_por_estado(
     estado: str = Path(..., description="Estado (UF)"),
     ano: Optional[int] = Query(default=None, description="Ano específico (opcional)"),
@@ -161,7 +204,7 @@ async def provas_por_estado(
     
     return success_response(provas, f'{len(provas)} provas encontradas')
 
-@router.get("/prova/futuras", tags=['Prova Consulta'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/futuras", tags=['Prova Consulta'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def provas_futuras(
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
@@ -174,7 +217,7 @@ async def provas_futuras(
     
     return success_response(provas, f'{len(provas)} provas futuras')
 
-@router.get("/prova/passadas", tags=['Prova Consulta'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/passadas", tags=['Prova Consulta'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def provas_passadas(
     limite: int = Query(default=50, ge=1, le=200, description="Número máximo de provas"),
     db: Session = Depends(get_db),
@@ -190,7 +233,7 @@ async def provas_passadas(
 
 # -------------------------- Estatísticas e Relatórios --------------------------
 
-@router.get("/prova/estatisticas/{prova_id}", tags=['Prova Estatísticas'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/estatisticas/{prova_id}", tags=['Prova Estatísticas'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def estatisticas_prova(
     prova_id: int = Path(..., description="ID da prova"),
     db: Session = Depends(get_db),
@@ -204,7 +247,7 @@ async def estatisticas_prova(
     
     return success_response(estatisticas)
 
-@router.get("/prova/ranking/{prova_id}", tags=['Prova Ranking'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/ranking/{prova_id}", tags=['Prova Ranking'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def ranking_prova(
     prova_id: int = Path(..., description="ID da prova"),
     categoria_id: Optional[int] = Query(default=None, description="ID da categoria (opcional)"),
@@ -222,7 +265,7 @@ async def ranking_prova(
     except Exception as e:
         return error_response(message=f'Erro ao gerar ranking: {str(e)}')
 
-@router.get("/prova/relatorio/anual/{ano}", tags=['Prova Relatórios'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/relatorio/anual/{ano}", tags=['Prova Relatórios'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def relatorio_anual(
     ano: int = Path(..., description="Ano do relatório"),
     db: Session = Depends(get_db),
@@ -236,7 +279,7 @@ async def relatorio_anual(
     except Exception as e:
         return error_response(message=f'Erro ao gerar relatório: {str(e)}')
 
-@router.get("/prova/calendario/{ano}", tags=['Prova Calendário'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/calendario/{ano}", tags=['Prova Calendário'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def calendario_provas(
     ano: int = Path(..., description="Ano do calendário"),
     db: Session = Depends(get_db),
@@ -255,7 +298,7 @@ async def calendario_provas(
 
 # -------------------------- Validações e Utilitários --------------------------
 
-@router.get("/prova/pode-alterar/{prova_id}", tags=['Prova Validação'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/pode-alterar/{prova_id}", tags=['Prova Validação'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def pode_alterar_prova(
     prova_id: int = Path(..., description="ID da prova"),
     db: Session = Depends(get_db),
@@ -274,7 +317,7 @@ async def pode_alterar_prova(
     except Exception as e:
         return error_response(message=f'Erro na verificação: {str(e)}')
 
-@router.post("/prova/duplicar/{prova_id}", tags=['Prova Utilitários'], status_code=status.HTTP_201_CREATED, response_model=models_lctp.ApiResponse)
+@router.post("/prova/duplicar/{prova_id}", tags=['Prova Utilitários'], status_code=status.HTTP_201_CREATED, response_model=models.ApiResponse)
 async def duplicar_prova(
     prova_id: int = Path(..., description="ID da prova original"),
     nova_data: date = Query(..., description="Data da nova prova"),
@@ -290,7 +333,7 @@ async def duplicar_prova(
     except ValueError as e:
         return error_response(message=str(e))
 
-@router.get("/prova/similares/{prova_id}", tags=['Prova Utilitários'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/similares/{prova_id}", tags=['Prova Utilitários'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def provas_similares(
     prova_id: int = Path(..., description="ID da prova"),
     limite: int = Query(default=5, ge=1, le=20, description="Número máximo de provas similares"),
@@ -310,7 +353,7 @@ async def provas_similares(
 
 # -------------------------- Exportação e Importação --------------------------
 
-@router.get("/prova/exportar", tags=['Prova Exportação'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/exportar", tags=['Prova Exportação'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def exportar_provas(
     formato: str = Query(default="json", regex="^(json|csv)$", description="Formato de exportação"),
     ano: Optional[int] = Query(default=None, description="Ano específico (opcional)"),
@@ -339,9 +382,9 @@ async def exportar_provas(
     except Exception as e:
         return error_response(message=f'Erro na exportação: {str(e)}')
 
-@router.post("/prova/importar", tags=['Prova Importação'], status_code=status.HTTP_201_CREATED, response_model=models_lctp.ApiResponse)
+@router.post("/prova/importar", tags=['Prova Importação'], status_code=status.HTTP_201_CREATED, response_model=models.ApiResponse)
 async def importar_provas(
-    provas_data: List[models_lctp.ProvaPOST] = Body(...),
+    provas_data: List[models.ProvaPOST] = Body(...),
     sobrescrever: bool = Query(default=False, description="Sobrescrever provas existentes"),
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
@@ -367,7 +410,7 @@ async def importar_provas(
                 
                 if prova_existente and sobrescrever:
                     # Atualizar existente
-                    prova_put = models_lctp.ProvaPUT(
+                    prova_put = models.ProvaPUT(
                         nome=prova_data.nome,
                         data=prova_data.data,
                         rancho=prova_data.rancho,
@@ -405,7 +448,7 @@ async def importar_provas(
 
 # -------------------------- Relatórios Especiais --------------------------
 
-@router.get("/prova/resumo/geral", tags=['Prova Resumo'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/resumo/geral", tags=['Prova Resumo'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def resumo_geral_provas(
     ano: Optional[int] = Query(default=None, description="Ano específico (opcional)"),
     db: Session = Depends(get_db),
@@ -475,7 +518,7 @@ async def resumo_geral_provas(
     except Exception as e:
         return error_response(message=f'Erro ao gerar resumo: {str(e)}')
 
-@router.get("/prova/analise/frequencia", tags=['Prova Análise'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/analise/frequencia", tags=['Prova Análise'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def analise_frequencia_provas(
     ano: Optional[int] = Query(default=None, description="Ano específico (opcional)"),
     db: Session = Depends(get_db),
@@ -542,11 +585,12 @@ async def analise_frequencia_provas(
 
 # -------------------------- Utilitários Específicos --------------------------
 
-@router.post("/prova/validar-data", tags=['Prova Validação'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.post("/prova/validar-data", tags=['Prova Validação'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def validar_data_prova(
     data_proposta: date = Query(..., description="Data proposta para a prova"),
     nome_prova: str = Query(..., description="Nome da prova"),
     rancho: Optional[str] = Query(default=None, description="Rancho da prova"),
+    excluir_id: Optional[int] = Query(default=None, description="ID da prova a excluir da validação (para edição)"),  # 👈 NOVO PARÂMETRO
     db: Session = Depends(get_db),
     usuario = Depends(obter_usuario_logado)
 ):
@@ -556,6 +600,10 @@ async def validar_data_prova(
         # Buscar provas na mesma data
         provas_mesma_data = await RepositorioProva(db).get_by_periodo(data_proposta, data_proposta)
         
+        # 🔥 FILTRAR A PROVA SENDO EDITADA
+        if excluir_id:
+            provas_mesma_data = [prova for prova in provas_mesma_data if prova.id != excluir_id]
+        
         # Buscar provas do mesmo rancho próximas
         provas_rancho_proximas = []
         if rancho:
@@ -564,7 +612,9 @@ async def validar_data_prova(
             for prova in provas_rancho:
                 diff_dias = abs((prova.data - data_proposta).days)
                 if diff_dias <= 7 and prova.data != data_proposta:
-                    provas_rancho_proximas.append(prova)
+                    # 🔥 TAMBÉM EXCLUIR DA VALIDAÇÃO DE RANCHO
+                    if not excluir_id or prova.id != excluir_id:
+                        provas_rancho_proximas.append(prova)
         
         # Análise de conflitos
         conflitos = []
@@ -604,7 +654,7 @@ async def validar_data_prova(
     except Exception as e:
         return error_response(message=f'Erro na validação: {str(e)}')
 
-@router.get("/prova/sugestoes/datas", tags=['Prova Utilitários'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/sugestoes/datas", tags=['Prova Utilitários'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def sugerir_datas_prova(
     mes: int = Query(..., ge=1, le=12, description="Mês desejado"),
     ano: int = Query(..., ge=2024, description="Ano desejado"),
@@ -616,7 +666,6 @@ async def sugerir_datas_prova(
     """Sugere datas disponíveis para uma prova"""
     
     try:
-        from datetime import datetime, timedelta
         import calendar
         
         # Gerar todas as datas do mês
@@ -699,7 +748,7 @@ async def sugerir_datas_prova(
     except Exception as e:
         return error_response(message=f'Erro ao gerar sugestões: {str(e)}')
 
-@router.post("/prova/configurar-padrao", tags=['Prova Configuração'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.post("/prova/configurar-padrao", tags=['Prova Configuração'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def configurar_prova_padrao(
     configuracao: Dict[str, Any] = Body(..., example={
         "valor_inscricao_padrao": 100.0,
@@ -736,10 +785,141 @@ async def configurar_prova_padrao(
         })
     except Exception as e:
         return error_response(message=f'Erro ao configurar: {str(e)}')
+    
+@router.get("/prova/{prova_id}/categoria/{categoria_id}/configuracao", tags=['Prova Configuração'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
+async def obter_configuracao_prova_categoria(
+    prova_id: int = Path(..., description="ID da prova"),
+    categoria_id: int = Path(..., description="ID da categoria"),
+    db: Session = Depends(get_db),
+    usuario = Depends(obter_usuario_logado)
+):
+    """Obtém a configuração de passadas de uma prova para uma categoria específica"""
+    
+    try:
+        # Verificar se a prova existe
+        prova = await RepositorioProva(db).get_by_id(prova_id)
+        if not prova:
+            return error_response(message=f'Prova com ID {prova_id} não encontrada!')
+        
+        # Verificar se a categoria existe
+        categoria = db.execute(
+            select(schemas.Categorias).where(schemas.Categorias.id == categoria_id)
+        ).scalars().first()
+        
+        if not categoria:
+            return error_response(message=f'Categoria com ID {categoria_id} não encontrada!')
+        
+        # Buscar configuração específica da prova/categoria
+        config_passadas = db.execute(
+            select(schemas.ConfiguracaoPassadasProva).where(
+                schemas.ConfiguracaoPassadasProva.prova_id == prova_id,
+                schemas.ConfiguracaoPassadasProva.categoria_id == categoria_id,
+                schemas.ConfiguracaoPassadasProva.ativa == True
+            )
+        ).scalars().first()
+        
+        # Se não tem configuração específica, usar configurações padrão por categoria
+        if not config_passadas:
+            configuracoes_padrao = {
+                'baby': {
+                    'max_passadas_por_trio': 3,
+                    'max_corridas_por_pessoa': 9,  # 3 trios x 3 passadas
+                    'tempo_limite_padrao': 90.0,
+                    'intervalo_minimo_passadas': 10,
+                    'permite_repetir_boi': True
+                },
+                'kids': {
+                    'max_passadas_por_trio': 5,
+                    'max_corridas_por_pessoa': 15,  # 3 trios x 5 passadas
+                    'tempo_limite_padrao': 75.0,
+                    'intervalo_minimo_passadas': 8,
+                    'permite_repetir_boi': True
+                },
+                'mirim': {
+                    'max_passadas_por_trio': 8,
+                    'max_corridas_por_pessoa': 24,  # 3 trios x 8 passadas
+                    'tempo_limite_padrao': 65.0,
+                    'intervalo_minimo_passadas': 6,
+                    'permite_repetir_boi': False
+                },
+                'feminina': {
+                    'max_passadas_por_trio': 8,
+                    'max_corridas_por_pessoa': 24,  # 3 trios x 8 passadas
+                    'tempo_limite_padrao': 65.0,
+                    'intervalo_minimo_passadas': 6,
+                    'permite_repetir_boi': False
+                },
+                'aberta': {
+                    'max_passadas_por_trio': 10,
+                    'max_corridas_por_pessoa': 30,  # 3 trios x 10 passadas
+                    'tempo_limite_padrao': 50.0,
+                    'intervalo_minimo_passadas': 5,
+                    'permite_repetir_boi': False
+                },
+                'handicap': {
+                    'max_passadas_por_trio': 10,
+                    'max_corridas_por_pessoa': 30,  # 3 trios x 10 passadas
+                    'tempo_limite_padrao': 55.0,
+                    'intervalo_minimo_passadas': 5,
+                    'permite_repetir_boi': False
+                }
+            }
+            
+            config_padrao = configuracoes_padrao.get(categoria.tipo, configuracoes_padrao['aberta'])
+            
+            configuracao = {
+                'id': None,
+                'prova_id': prova_id,
+                'categoria_id': categoria_id,
+                'max_passadas_por_trio': config_padrao['max_passadas_por_trio'],
+                'max_corridas_por_pessoa': config_padrao['max_corridas_por_pessoa'],
+                'tempo_limite_padrao': config_padrao['tempo_limite_padrao'],
+                'intervalo_minimo_passadas': config_padrao['intervalo_minimo_passadas'],
+                'permite_repetir_boi': config_padrao['permite_repetir_boi'],
+                'bois_disponiveis': None,
+                'ativa': True,
+                'created_at': None,
+                'origem': 'padrao',
+                'observacoes': f'Configuração padrão para categoria {categoria.tipo}'
+            }
+        else:
+            # Retornar configuração específica encontrada
+            configuracao = {
+                'id': config_passadas.id,
+                'prova_id': config_passadas.prova_id,
+                'categoria_id': config_passadas.categoria_id,
+                'max_passadas_por_trio': config_passadas.max_passadas_por_trio,
+                'max_corridas_por_pessoa': config_passadas.max_corridas_por_pessoa,
+                'tempo_limite_padrao': float(config_passadas.tempo_limite_padrao),
+                'intervalo_minimo_passadas': config_passadas.intervalo_minimo_passadas,
+                'permite_repetir_boi': config_passadas.permite_repetir_boi,
+                'bois_disponiveis': config_passadas.get_bois_disponiveis_list() if hasattr(config_passadas, 'get_bois_disponiveis_list') else None,
+                'ativa': config_passadas.ativa,
+                'created_at': config_passadas.created_at.isoformat() if config_passadas.created_at else None,
+                'origem': 'especifica',
+                'observacoes': 'Configuração específica para esta prova/categoria'
+            }
+        
+        # Informações adicionais úteis
+        configuracao['info_adicional'] = {
+            'prova_nome': prova.nome,
+            'prova_data': prova.data.isoformat() if prova.data else None,
+            'categoria_nome': categoria.nome,
+            'categoria_tipo': categoria.tipo,
+            'total_participacoes_teoricas': configuracao['max_corridas_por_pessoa'],
+            'trios_teoricos_por_competidor': configuracao['max_corridas_por_pessoa'] // configuracao['max_passadas_por_trio'],
+            'calculado_em': datetime.now().isoformat()
+        }
+        
+        return success_response(configuracao, 'Configuração obtida com sucesso')
+        
+    except Exception as error:
+        print(f"Erro ao buscar configuração: {str(error)}")
+        return error_response(message=f'Erro interno do servidor: {str(error)}')
 
 # -------------------------- Dashboard e Visão Geral --------------------------
 
-@router.get("/prova/dashboard", tags=['Prova Dashboard'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/dashboard", tags=['Prova Dashboard'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def dashboard_provas(
     periodo_dias: int = Query(default=90, ge=30, le=365, description="Período em dias para análise"),
     db: Session = Depends(get_db),
@@ -840,7 +1020,7 @@ async def dashboard_provas(
     except Exception as e:
         return error_response(message=f'Erro ao gerar dashboard: {str(e)}')
 
-@router.get("/prova/metricas/performance", tags=['Prova Métricas'], status_code=status.HTTP_200_OK, response_model=models_lctp.ApiResponse)
+@router.get("/prova/metricas/performance", tags=['Prova Métricas'], status_code=status.HTTP_200_OK, response_model=models.ApiResponse)
 async def metricas_performance_sistema(
     ano: Optional[int] = Query(default=None, description="Ano específico (opcional)"),
     db: Session = Depends(get_db),

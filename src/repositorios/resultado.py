@@ -1,6 +1,6 @@
 from sqlalchemy import select, delete, update, func, desc, asc, and_, or_, case
 from sqlalchemy.orm import Session, joinedload
-from src.database import models_lctp, schemas_lctp
+from src.database import models, schemas
 from src.utils.error_handler import handle_error
 from src.utils.utils_lctp import UtilsLCTP
 from src.utils.config_lctp import ConfigLCTP
@@ -20,54 +20,54 @@ class RepositorioResultado:
 
     # ---------------------- Operações Básicas ----------------------
 
-    async def get_by_id(self, resultado_id: int) -> Optional[schemas_lctp.Resultados]:
+    async def get_by_id(self, resultado_id: int) -> Optional[schemas.Resultados]:
         """Recupera um resultado pelo ID"""
         try:
-            stmt = select(schemas_lctp.Resultados).options(
-                joinedload(schemas_lctp.Resultados.trio).joinedload(schemas_lctp.Trios.integrantes).joinedload(schemas_lctp.IntegrantesTrios.competidor),
-                joinedload(schemas_lctp.Resultados.trio).joinedload(schemas_lctp.Trios.categoria),
-                joinedload(schemas_lctp.Resultados.prova)
-            ).where(schemas_lctp.Resultados.id == resultado_id)
+            stmt = select(schemas.Resultados).options(
+                joinedload(schemas.Resultados.trio).joinedload(schemas.Trios.integrantes).joinedload(schemas.IntegrantesTrios.competidor),
+                joinedload(schemas.Resultados.trio).joinedload(schemas.Trios.categoria),
+                joinedload(schemas.Resultados.prova)
+            ).where(schemas.Resultados.id == resultado_id)
             
             return self.db.execute(stmt).scalars().first()
         except Exception as error:
             handle_error(error, self.get_by_id)
 
-    async def get_by_trio(self, trio_id: int) -> Optional[schemas_lctp.Resultados]:
+    async def get_by_trio(self, trio_id: int) -> Optional[schemas.Resultados]:
         """Recupera resultado de um trio"""
         try:
-            stmt = select(schemas_lctp.Resultados).options(
-                joinedload(schemas_lctp.Resultados.trio),
-                joinedload(schemas_lctp.Resultados.prova)
-            ).where(schemas_lctp.Resultados.trio_id == trio_id)
+            stmt = select(schemas.Resultados).options(
+                joinedload(schemas.Resultados.trio),
+                joinedload(schemas.Resultados.prova)
+            ).where(schemas.Resultados.trio_id == trio_id)
             
             return self.db.execute(stmt).scalars().first()
         except Exception as error:
             handle_error(error, self.get_by_trio)
 
-    async def get_by_prova(self, prova_id: int, categoria_id: Optional[int] = None) -> List[schemas_lctp.Resultados]:
+    async def get_by_prova(self, prova_id: int, categoria_id: Optional[int] = None) -> List[schemas.Resultados]:
         """Recupera resultados de uma prova (opcionalmente filtrados por categoria)"""
         try:
-            stmt = select(schemas_lctp.Resultados).options(
-                joinedload(schemas_lctp.Resultados.trio).joinedload(schemas_lctp.Trios.integrantes).joinedload(schemas_lctp.IntegrantesTrios.competidor),
-                joinedload(schemas_lctp.Resultados.trio).joinedload(schemas_lctp.Trios.categoria)
-            ).where(schemas_lctp.Resultados.prova_id == prova_id)
+            stmt = select(schemas.Resultados).options(
+                joinedload(schemas.Resultados.trio).joinedload(schemas.Trios.integrantes).joinedload(schemas.IntegrantesTrios.competidor),
+                joinedload(schemas.Resultados.trio).joinedload(schemas.Trios.categoria)
+            ).where(schemas.Resultados.prova_id == prova_id)
 
             if categoria_id:
-                stmt = stmt.join(schemas_lctp.Trios).where(schemas_lctp.Trios.categoria_id == categoria_id)
+                stmt = stmt.join(schemas.Trios).where(schemas.Trios.categoria_id == categoria_id)
 
-            stmt = stmt.order_by(schemas_lctp.Resultados.colocacao.asc())
+            stmt = stmt.order_by(schemas.Resultados.colocacao.asc())
             
             return self.db.execute(stmt).scalars().all()
         except Exception as error:
             handle_error(error, self.get_by_prova)
 
-    async def post(self, resultado_data: models_lctp.ResultadoPOST) -> schemas_lctp.Resultados:
+    async def post(self, resultado_data: models.ResultadoPOST) -> schemas.Resultados:
         """Cria um novo resultado"""
         try:
             # Verificar se o trio existe
-            trio = await self.db.execute(
-                select(schemas_lctp.Trios).where(schemas_lctp.Trios.id == resultado_data.trio_id)
+            trio = self.db.execute(
+                select(schemas.Trios).where(schemas.Trios.id == resultado_data.trio_id)
             ).scalars().first()
             
             if not trio:
@@ -78,7 +78,7 @@ class RepositorioResultado:
             if resultado_existente:
                 raise LCTPException("Trio já possui resultado cadastrado")
 
-            db_resultado = schemas_lctp.Resultados(
+            db_resultado = schemas.Resultados(
                 trio_id=resultado_data.trio_id,
                 prova_id=resultado_data.prova_id,
                 passada1_tempo=resultado_data.passada1_tempo,
@@ -103,7 +103,7 @@ class RepositorioResultado:
             self.db.rollback()
             handle_error(error, self.post)
 
-    async def put(self, resultado_id: int, resultado_data: models_lctp.ResultadoPUT) -> Optional[schemas_lctp.Resultados]:
+    async def put(self, resultado_id: int, resultado_data: models.ResultadoPUT) -> Optional[schemas.Resultados]:
         """Atualiza um resultado"""
         try:
             resultado_existente = await self.get_by_id(resultado_id)
@@ -114,8 +114,8 @@ class RepositorioResultado:
             update_data = {k: v for k, v in resultado_data.model_dump().items() if v is not None}
             
             if update_data:
-                stmt = update(schemas_lctp.Resultados).where(
-                    schemas_lctp.Resultados.id == resultado_id
+                stmt = update(schemas.Resultados).where(
+                    schemas.Resultados.id == resultado_id
                 ).values(**update_data)
                 
                 self.db.execute(stmt)
@@ -140,13 +140,13 @@ class RepositorioResultado:
                 raise LCTPException(f"Resultado com ID {resultado_id} não encontrado")
 
             # Remover pontuações associadas primeiro
-            await self.db.execute(
-                delete(schemas_lctp.Pontuacao).where(
+            self.db.execute(
+                delete(schemas.Pontuacao).where(
                     and_(
-                        schemas_lctp.Pontuacao.prova_id == resultado.prova_id,
-                        schemas_lctp.Pontuacao.competidor_id.in_(
-                            select(schemas_lctp.IntegrantesTrios.competidor_id).where(
-                                schemas_lctp.IntegrantesTrios.trio_id == resultado.trio_id
+                        schemas.Pontuacao.prova_id == resultado.prova_id,
+                        schemas.Pontuacao.competidor_id.in_(
+                            select(schemas.IntegrantesTrios.competidor_id).where(
+                                schemas.IntegrantesTrios.trio_id == resultado.trio_id
                             )
                         )
                     )
@@ -154,8 +154,8 @@ class RepositorioResultado:
             )
 
             # Remover resultado
-            stmt = delete(schemas_lctp.Resultados).where(
-                schemas_lctp.Resultados.id == resultado_id
+            stmt = delete(schemas.Resultados).where(
+                schemas.Resultados.id == resultado_id
             )
             
             self.db.execute(stmt)
@@ -185,7 +185,7 @@ class RepositorioResultado:
                     # Verificar se já existe resultado
                     resultado_existente = await self.get_by_trio(trio_id)
                     
-                    resultado_data = models_lctp.ResultadoPOST(
+                    resultado_data = models.ResultadoPOST(
                         trio_id=trio_id,
                         prova_id=prova_id,
                         passada1_tempo=resultado_info.get('passada1_tempo'),
@@ -199,7 +199,7 @@ class RepositorioResultado:
 
                     if resultado_existente:
                         # Atualizar
-                        resultado_put = models_lctp.ResultadoPUT(**resultado_data.model_dump())
+                        resultado_put = models.ResultadoPUT(**resultado_data.model_dump())
                         resultado = await self.put(resultado_existente.id, resultado_put)
                         resultados_atualizados.append(resultado)
                     else:
@@ -224,25 +224,25 @@ class RepositorioResultado:
         """Calcula colocações automaticamente baseado nos tempos médios"""
         try:
             # Buscar resultados da prova/categoria
-            query = self.db.query(schemas_lctp.Resultados).join(
-                schemas_lctp.Trios
+            query = self.db.query(schemas.Resultados).join(
+                schemas.Trios
             ).filter(
-                schemas_lctp.Resultados.prova_id == prova_id,
-                schemas_lctp.Resultados.media_tempo.isnot(None),
-                schemas_lctp.Resultados.no_time == False,
-                schemas_lctp.Resultados.desclassificado == False
+                schemas.Resultados.prova_id == prova_id,
+                schemas.Resultados.media_tempo.isnot(None),
+                schemas.Resultados.no_time == False,
+                schemas.Resultados.desclassificado == False
             )
 
             if categoria_id:
-                query = query.filter(schemas_lctp.Trios.categoria_id == categoria_id)
+                query = query.filter(schemas.Trios.categoria_id == categoria_id)
 
             # Ordenar por tempo médio
-            resultados = query.order_by(schemas_lctp.Resultados.media_tempo.asc()).all()
+            resultados = query.order_by(schemas.Resultados.media_tempo.asc()).all()
 
             # Atribuir colocações
             for i, resultado in enumerate(resultados, 1):
-                stmt = update(schemas_lctp.Resultados).where(
-                    schemas_lctp.Resultados.id == resultado.id
+                stmt = update(schemas.Resultados).where(
+                    schemas.Resultados.id == resultado.id
                 ).values(colocacao=i)
                 
                 self.db.execute(stmt)
@@ -268,12 +268,12 @@ class RepositorioResultado:
                 # Para cada integrante do trio
                 for integrante in resultado.trio.integrantes:
                     # Verificar se já existe pontuação
-                    pontuacao_existente = await self.db.execute(
-                        select(schemas_lctp.Pontuacao).where(
+                    pontuacao_existente = self.db.execute(
+                        select(schemas.Pontuacao).where(
                             and_(
-                                schemas_lctp.Pontuacao.competidor_id == integrante.competidor_id,
-                                schemas_lctp.Pontuacao.prova_id == prova_id,
-                                schemas_lctp.Pontuacao.categoria_id == resultado.trio.categoria_id
+                                schemas.Pontuacao.competidor_id == integrante.competidor_id,
+                                schemas.Pontuacao.prova_id == prova_id,
+                                schemas.Pontuacao.categoria_id == resultado.trio.categoria_id
                             )
                         )
                     ).scalars().first()
@@ -287,8 +287,8 @@ class RepositorioResultado:
 
                     if pontuacao_existente:
                         # Atualizar
-                        stmt = update(schemas_lctp.Pontuacao).where(
-                            schemas_lctp.Pontuacao.id == pontuacao_existente.id
+                        stmt = update(schemas.Pontuacao).where(
+                            schemas.Pontuacao.id == pontuacao_existente.id
                         ).values(
                             pontos_colocacao=pontos_colocacao,
                             pontos_premiacao=pontos_premiacao,
@@ -300,7 +300,7 @@ class RepositorioResultado:
                         pontuacoes_atualizadas += 1
                     else:
                         # Criar nova
-                        nova_pontuacao = schemas_lctp.Pontuacao(
+                        nova_pontuacao = schemas.Pontuacao(
                             competidor_id=integrante.competidor_id,
                             prova_id=prova_id,
                             categoria_id=resultado.trio.categoria_id,
@@ -370,15 +370,15 @@ class RepositorioResultado:
     async def get_estatisticas_resultado_categoria(self, categoria_id: int, ano: Optional[int] = None) -> Dict[str, Any]:
         """Gera estatísticas de resultados por categoria"""
         try:
-            query = self.db.query(schemas_lctp.Resultados).join(
-                schemas_lctp.Trios
+            query = self.db.query(schemas.Resultados).join(
+                schemas.Trios
             ).filter(
-                schemas_lctp.Trios.categoria_id == categoria_id
+                schemas.Trios.categoria_id == categoria_id
             )
 
             if ano:
-                query = query.join(schemas_lctp.Provas).filter(
-                    func.extract('year', schemas_lctp.Provas.data) == ano
+                query = query.join(schemas.Provas).filter(
+                    func.extract('year', schemas.Provas.data) == ano
                 )
 
             resultados = query.all()
@@ -425,25 +425,25 @@ class RepositorioResultado:
     async def get_melhores_tempos_categoria(self, categoria_id: int, limite: int = 10, ano: Optional[int] = None) -> List[Dict[str, Any]]:
         """Retorna os melhores tempos de uma categoria"""
         try:
-            query = self.db.query(schemas_lctp.Resultados).join(
-                schemas_lctp.Trios
+            query = self.db.query(schemas.Resultados).join(
+                schemas.Trios
             ).options(
-                joinedload(schemas_lctp.Resultados.trio).joinedload(schemas_lctp.Trios.integrantes).joinedload(schemas_lctp.IntegrantesTrios.competidor),
-                joinedload(schemas_lctp.Resultados.prova)
+                joinedload(schemas.Resultados.trio).joinedload(schemas.Trios.integrantes).joinedload(schemas.IntegrantesTrios.competidor),
+                joinedload(schemas.Resultados.prova)
             ).filter(
-                schemas_lctp.Trios.categoria_id == categoria_id,
-                schemas_lctp.Resultados.media_tempo.isnot(None),
-                schemas_lctp.Resultados.no_time == False,
-                schemas_lctp.Resultados.desclassificado == False
+                schemas.Trios.categoria_id == categoria_id,
+                schemas.Resultados.media_tempo.isnot(None),
+                schemas.Resultados.no_time == False,
+                schemas.Resultados.desclassificado == False
             )
 
             if ano:
-                query = query.join(schemas_lctp.Provas).filter(
-                    func.extract('year', schemas_lctp.Provas.data) == ano
+                query = query.join(schemas.Provas).filter(
+                    func.extract('year', schemas.Provas.data) == ano
                 )
 
             # Ordenar por tempo médio crescente
-            resultados = query.order_by(schemas_lctp.Resultados.media_tempo.asc()).limit(limite).all()
+            resultados = query.order_by(schemas.Resultados.media_tempo.asc()).limit(limite).all()
 
             melhores_tempos = []
             for i, resultado in enumerate(resultados, 1):
@@ -478,8 +478,8 @@ class RepositorioResultado:
         """Gera relatório completo de performance de uma prova"""
         try:
             # Buscar dados básicos da prova
-            prova = await self.db.execute(
-                select(schemas_lctp.Provas).where(schemas_lctp.Provas.id == prova_id)
+            prova = self.db.execute(
+                select(schemas.Provas).where(schemas.Provas.id == prova_id)
             ).scalars().first()
 
             if not prova:
@@ -688,11 +688,11 @@ class RepositorioResultado:
                         continue
 
                     # Buscar trio pelo número
-                    trio = await self.db.execute(
-                        select(schemas_lctp.Trios).where(
+                    trio = self.db.execute(
+                        select(schemas.Trios).where(
                             and_(
-                                schemas_lctp.Trios.prova_id == prova_id,
-                                schemas_lctp.Trios.numero_trio == trio_numero
+                                schemas.Trios.prova_id == prova_id,
+                                schemas.Trios.numero_trio == trio_numero
                             )
                         )
                     ).scalars().first()
@@ -702,7 +702,7 @@ class RepositorioResultado:
                         continue
 
                     # Converter dados
-                    resultado_data = models_lctp.ResultadoPOST(
+                    resultado_data = models.ResultadoPOST(
                         trio_id=trio.id,
                         prova_id=prova_id,
                         passada1_tempo=float(linha['passada1_tempo']) if linha.get('passada1_tempo') else None,
@@ -719,7 +719,7 @@ class RepositorioResultado:
                     
                     if resultado_existente:
                         # Atualizar
-                        resultado_put = models_lctp.ResultadoPUT(**resultado_data.model_dump())
+                        resultado_put = models.ResultadoPUT(**resultado_data.model_dump())
                         await self.put(resultado_existente.id, resultado_put)
                     else:
                         # Criar novo
@@ -752,8 +752,8 @@ class RepositorioResultado:
                 resultado.calcular_premiacao_liquida()
                 
                 # Atualizar no banco
-                stmt = update(schemas_lctp.Resultados).where(
-                    schemas_lctp.Resultados.id == resultado.id
+                stmt = update(schemas.Resultados).where(
+                    schemas.Resultados.id == resultado.id
                 ).values(
                     media_tempo=resultado.media_tempo,
                     premiacao_liquida=resultado.premiacao_liquida
@@ -776,12 +776,12 @@ class RepositorioResultado:
             
             for resultado in resultados:
                 # Verificar colocação duplicada
-                colocacao_duplicada = await self.db.execute(
-                    select(func.count(schemas_lctp.Resultados.id)).where(
+                colocacao_duplicada = self.db.execute(
+                    select(func.count(schemas.Resultados.id)).where(
                         and_(
-                            schemas_lctp.Resultados.prova_id == prova_id,
-                            schemas_lctp.Resultados.colocacao == resultado.colocacao,
-                            schemas_lctp.Resultados.id != resultado.id
+                            schemas.Resultados.prova_id == prova_id,
+                            schemas.Resultados.colocacao == resultado.colocacao,
+                            schemas.Resultados.id != resultado.id
                         )
                     )
                 ).scalar()

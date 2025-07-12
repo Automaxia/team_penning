@@ -32,14 +32,6 @@ ENV API_ENVIRONMENT=production \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# Adicionar labels para documentação
-LABEL org.opencontainers.image.source="https://hub.docker.com/r/wesleyromualdo/talkcare-api"
-LABEL org.opencontainers.image.description="Imagem privada da API Talkcare"
-LABEL org.opencontainers.image.vendor="Talkcare"
-LABEL org.opencontainers.image.version="1.0.0"
-LABEL org.opencontainers.image.licenses="proprietary"
-LABEL org.opencontainers.image.created="2024-03-21"
-
 # Configurar permissões
 RUN chown -R appuser:appuser /app && \
     chmod -R 755 /app

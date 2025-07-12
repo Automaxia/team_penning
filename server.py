@@ -1,4 +1,3 @@
-# server.py - Servidor principal do Sistema LCTP
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
@@ -7,10 +6,11 @@ from contextlib import asynccontextmanager
 import uvicorn
 import logging
 from datetime import datetime
+from src.utils.exceptions_lctp import LCTPException
 
 # Imports do banco de dados
-from src.database.db import get_db, engine
-from src.database import schemas_lctp, models_lctp
+from src.database.db import get_db, engine, Base
+from src.database import schemas, models
 
 # Imports das rotas LCTP
 from src.routers import (
@@ -19,7 +19,11 @@ from src.routers import (
     route_categoria, 
     route_prova, 
     route_resultado, 
-    route_pontuacao
+    route_pontuacao,
+    route_passadas,
+    route_auth,
+    route_usuario,
+    route_dashboard
 )
 
 # Configuração de logging
@@ -37,7 +41,7 @@ tags_metadata = [
     # Competidores
     {
         "name": "Competidor",
-        "description": "Gerencia competidores de team roping. Inclui criação, atualização, ranking e estatísticas.",
+        "description": "Gerencia competidores de team penning. Inclui criação, atualização, ranking e estatísticas.",
         "externalDocs": {
             "description": "Regulamento LCTP",
             "url": "https://lctp.com.br/regulamento",
@@ -159,7 +163,7 @@ tags_metadata = [
     # Provas
     {
         "name": "Prova",
-        "description": "Gerencia provas/eventos de team roping com informações de local, data e configurações."
+        "description": "Gerencia provas/eventos de team penning com informações de local, data e configurações."
     },
     {
         "name": "Prova Consulta",
@@ -216,6 +220,54 @@ tags_metadata = [
     {
         "name": "Prova Métricas",
         "description": "Métricas de performance do sistema de provas."
+    },
+    {
+        "name": "Passadas",
+        "description": "🆕 Sistema de controle de passadas múltiplas por trio. Permite que cada trio compita várias vezes respeitando limites por competidor."
+    },
+    {
+        "name": "Passadas Lote",
+        "description": "Criação e gerenciamento de múltiplas passadas em lote para otimizar o processo."
+    },
+    {
+        "name": "Passadas Execução",
+        "description": "Registro de tempos e execução de passadas com validações automáticas."
+    },
+    {
+        "name": "Passadas Validação",
+        "description": "Validações de regras para execução de passadas (limites, intervalos, bois disponíveis)."
+    },
+    {
+        "name": "Configuração Passadas",
+        "description": "Configuração de regras de passadas por prova e categoria (limites, tempos, bois)."
+    },
+    {
+        "name": "Controle Participação",
+        "description": "Controle individual de quantas vezes cada competidor pode participar por prova/categoria."
+    },
+    {
+        "name": "Rankings Passadas",
+        "description": "Rankings específicos por passada, tempo e pontuação de cada corrida."
+    },
+    {
+        "name": "Relatórios Passadas",
+        "description": "Relatórios detalhados de performance por passada e resumos de trios."
+    },
+    {
+        "name": "Estatísticas Passadas",
+        "description": "Estatísticas avançadas de tempos, distribuição e performance das passadas."
+    },
+    {
+        "name": "Dashboard Passadas",
+        "description": "Dashboard em tempo real com monitoramento de passadas do dia."
+    },
+    {
+        "name": "Trio Passadas",
+        "description": "Operações específicas de passadas para trios individuais."
+    },
+    {
+        "name": "Exportação Passadas",
+        "description": "Exportação de dados de passadas em formatos estruturados."
     },
     
     # Resultados
@@ -310,16 +362,13 @@ tags_metadata = [
         "description": "Validação de consistência dos cálculos de pontuação."
     },
     {
-        "name": "Pontuação Simulação",
-        "description": "Simulação de cálculos de pontuação sem persistir dados."
+        "name": "Usuário",
+        "description": "Gerenciamento de usuários do sistema."
     },
+    # NOVA TAG ADICIONADA PARA O DASHBOARD
     {
-        "name": "Pontuação Análise",
-        "description": "Análises de evolução e comparação entre competidores."
-    },
-    {
-        "name": "Pontuação Dashboard",
-        "description": "Dashboard com visão geral do sistema de pontuação."
+        "name": "Dashboard (BI)",
+        "description": "Endpoints de dados agregados para alimentar painéis de Business Intelligence (BI)."
     }
 ]
 
@@ -335,7 +384,7 @@ async def lifespan(app: FastAPI):
     
     # Criar tabelas se não existirem
     try:
-        schemas_lctp.Base.metadata.create_all(bind=engine)
+        Base.metadata.create_all(bind=engine)
         logger.info("✅ Estrutura do banco de dados verificada/criada")
     except Exception as e:
         logger.error(f"❌ Erro ao configurar banco de dados: {e}")
@@ -344,6 +393,7 @@ async def lifespan(app: FastAPI):
     logger.info("🎯 Sistema LCTP iniciado com sucesso!")
     logger.info("📚 Documentação disponível em: /docs")
     logger.info("🔄 Documentação alternativa em: /redoc")
+    logger.info("🆕 Novo módulo de Passadas disponível!")
     
     yield
     
@@ -357,69 +407,20 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Sistema LCTP - Liga de Competição de Team Penning",
     description="""
-    ## 🏇 Sistema Completo para Gerenciamento de Competições de Team Roping
+    ## 🏇 Sistema Completo para Gerenciamento de Competições de Team penning
     
     Sistema desenvolvido seguindo as regras da **LCTP (CONTEP)** para gerenciar 
-    competições de team roping de forma completa e profissional.
-    
-    ### 🎯 **Funcionalidades Principais:**
-    
-    #### 👥 **Gestão de Competidores**
-    - Cadastro completo com validações
-    - Cálculo automático de idade e categorias elegíveis
-    - Controle de handicap (0-7)
-    - Rankings e estatísticas detalhadas
-    - Importação/exportação em lote
-    
-    #### 🎲 **Sistema Inteligente de Trios**
-    - Formação manual ou por sorteio automático
-    - Validação automática de regras por categoria
-    - Sorteios específicos (baby, kids, mirim, feminina)
-    - Copa dos Campeões com sistema de cabeças de chave
-    
-    #### 🏆 **Categorias e Regras Avançadas**
-    - **Baby**: sorteio completo (até 12 anos)
-    - **Kids**: sorteio parcial (13-17 anos, 3-9 competidores)
-    - **Mirim**: limite de 36 anos por trio
-    - **Feminina**: categoria exclusiva para mulheres
-    - **Aberta**: sem restrições específicas
-    - **Handicap**: limite de 11 pontos por trio
-    
-    #### 📊 **Sistema de Pontuação CONTEP**
-    - Pontos por colocação (1º=10pts, 2º=9pts, etc.)
-    - Pontos por premiação (R$100 = 1 ponto)
-    - Cálculo automático de médias e rankings
-    - Histórico completo por competidor/categoria
-    
-    #### 📈 **Relatórios e Análises**
-    - Rankings detalhados por categoria e período
-    - Estatísticas de performance individuais
-    - Relatórios de participação e evolução
-    - Análises comparativas entre competidores
-    - Dashboard executivo com métricas do sistema
-    
-    ### 🔧 **Tecnologias Utilizadas:**
-    - **Python 3.13** - Linguagem principal
-    - **FastAPI** - Framework web moderno e rápido
-    - **SQLAlchemy** - ORM para banco de dados
-    - **Pydantic** - Validação de dados
-    - **PostgreSQL/MySQL** - Banco de dados principal
-    
-    ### 📋 **Como Usar:**
-    1. **Cadastre competidores** com seus dados básicos
-    2. **Configure categorias** com regras específicas
-    3. **Crie provas** definindo local, data e configurações
-    4. **Forme trios** manualmente ou via sorteio automático
-    5. **Lance resultados** e deixe o sistema calcular a pontuação
-    6. **Acompanhe rankings** e estatísticas em tempo real
+    competições de team penning de forma completa e profissional.
     
     ### 🏁 **Padrão LCTP/CONTEP:**
     Sistema totalmente aderente ao regulamento oficial da Liga de Competição 
-    de Team Penning, garantindo transparência e padronização nas competições.
+    de Team Penning, agora com controle avançado de múltiplas participações.
     
     ---
     
-    **Desenvolvido com ❤️ para a comunidade do Team Roping brasileiro**
+    **Desenvolvido com ❤️ para a comunidade do Team penning brasileiro**
+    
+    **Versão 2.0 - Agora com Sistema de Passadas Múltiplas! 🆕**
     """,
     version="2.0.0",
     contact={
@@ -463,12 +464,21 @@ async def root():
         "sistema": "LCTP - Liga de Competição de Team Penning",
         "versao": "2.0.0",
         "status": "ativo",
-        "descricao": "Sistema completo para gerenciamento de competições de team roping",
+        "descricao": "Sistema completo para gerenciamento de competições de team penning",
         "documentacao": "/docs",
+        "novidades_v2": [
+            "🆕 Sistema de Controle de Passadas",
+            "🔄 Múltiplas corridas por trio",
+            "⏱️ Controle de limites por competidor",
+            "🐂 Gestão de bois por passada",
+            "📊 Rankings específicos por passada",
+            "📈 Dashboard de monitoramento em tempo real"
+        ],
         "funcionalidades": [
             "Gestão de Competidores",
             "Sistema de Trios",
             "Categorias com Regras",
+            "Controle de Passadas Múltiplas",
             "Pontuação CONTEP",
             "Rankings e Estatísticas",
             "Relatórios Avançados"
@@ -485,6 +495,13 @@ async def health_check():
         # Testar conexão com banco
         db = next(get_db())
         db.execute("SELECT 1")
+        
+        # Verificar tabelas principais
+        tabelas_principais = [
+            "competidores", "trios", "categorias", "provas", 
+            "resultados", "pontuacao", "passadas_trio"  # NOVA TABELA
+        ]
+        
         db_status = "conectado"
     except Exception as e:
         db_status = f"erro: {str(e)}"
@@ -493,7 +510,14 @@ async def health_check():
         "status": "ok" if db_status == "conectado" else "erro",
         "timestamp": datetime.now().isoformat(),
         "banco_dados": db_status,
-        "versao_sistema": "2.0.0"
+        "versao_sistema": "2.0.0",
+        "modulo_passadas": "ativo",
+        "novas_funcionalidades": {
+            "controle_passadas": True,
+            "multiplas_corridas": True,
+            "limite_competidores": True,
+            "gestao_bois": True
+        }
     }
 
 @app.get("/info", tags=["Sistema"], summary="Informações Técnicas")
@@ -506,7 +530,8 @@ async def system_info():
             "nome": "Sistema LCTP",
             "versao": "2.0.0",
             "python_version": "3.13+",
-            "framework": "FastAPI"
+            "framework": "FastAPI",
+            "novidades_v2": "Sistema de Controle de Passadas"
         },
         "modulos": {
             "competidores": "Gestão completa de competidores",
@@ -514,7 +539,8 @@ async def system_info():
             "categorias": "Regras por categoria (Baby, Kids, Mirim, etc.)",
             "provas": "Gerenciamento de eventos e competições",
             "resultados": "Lançamento de tempos e colocações",
-            "pontuacao": "Sistema CONTEP de pontuação"
+            "pontuacao": "Sistema CONTEP de pontuação",
+            "passadas": "🆕 Controle de múltiplas corridas por trio"
         },
         "endpoints_disponiveis": {
             "competidores": 20,
@@ -522,7 +548,8 @@ async def system_info():
             "categorias": 12,
             "provas": 18,
             "resultados": 16,
-            "pontuacao": 14
+            "pontuacao": 14,
+            "passadas": 22  # NOVOS ENDPOINTS
         },
         "recursos": {
             "sorteios_automaticos": True,
@@ -530,9 +557,23 @@ async def system_info():
             "calculo_pontuacao": True,
             "rankings_tempo_real": True,
             "relatorios_avancados": True,
-            "import_export": True
+            "import_export": True,
+            "controle_passadas_multiplas": True,  # NOVO
+            "limite_corridas_competidor": True,   # NOVO
+            "gestao_bois_passadas": True,         # NOVO
+            "dashboard_tempo_real": True          # NOVO
+        },
+        "sistema_passadas": {
+            "max_passadas_configuravel": True,
+            "controle_individual_competidor": True,
+            "intervalo_entre_passadas": True,
+            "gestao_bois_automatica": True,
+            "pontuacao_por_passada": True,
+            "rankings_especificos": True,
+            "validacoes_automaticas": True
         }
     }
+
 
 # ===================================================================
 # INCLUSÃO DAS ROTAS DOS MÓDULOS LCTP
@@ -580,6 +621,34 @@ app.include_router(
     tags=["Pontuação LCTP"]
 )
 
+# 🆕 NOVA ROTA: Sistema de Passadas
+app.include_router(
+    route_passadas.router,
+    prefix="/api/v1",
+    tags=["Passadas LCTP"]
+)
+
+# Rotas de Autenticação
+app.include_router(
+    route_auth.router,
+    prefix="/api/v1",
+    tags=["Autenticação"]
+)
+
+# Rotas de Usuários
+app.include_router(
+    route_usuario.router,
+    prefix="/api/v1",
+    tags=["Usuário"]
+)
+
+# ROTA DO DASHBOARD ATUALIZADA
+app.include_router(
+    route_dashboard.router,
+    prefix="/api/v1",
+    tags=["Dashboard (BI)"]
+)
+
 # ===================================================================
 # CONFIGURAÇÃO DE EXCEÇÕES GLOBAIS
 # ===================================================================
@@ -605,6 +674,10 @@ async def value_error_handler(request, exc):
 # ===================================================================
 
 if __name__ == "__main__":
+    print("🏇 Sistema LCTP v2.0 - Agora com Controle de Passadas! 🆕")
+    print("📚 Documentação: http://localhost:8000/docs")
+    print("🎯 Novidades: http://localhost:8000/novidades")
+    
     uvicorn.run(
         "server:app",
         host="0.0.0.0",
